@@ -68,6 +68,8 @@ Actualización segura de componentes Mostro (mostrod, mostrix, mostro-watchdog).
 ./mostro-update.sh --check      # Solo comprobar, sin actualizar
 ```
 
+![mostro-update.sh](images/mostro-update.png)
+
 ### mostro-rollback.sh
 
 Restaura una versión anterior de cualquier componente desde los backups creados por `mostro-update.sh`.
@@ -84,6 +86,8 @@ Muestra el estado completo del nodo: servicios activos, versiones instaladas vs 
 ```bash
 ./mostro-status.sh
 ```
+
+![mostro-status.sh](images/mostro-status.png)
 
 ### mostro_bot.py
 
@@ -102,6 +106,8 @@ Busca y formatea logs de Mostro por order ID. Usa `journalctl` por defecto o un 
 ```bash
 ./mostro_log_search.sh a179dca3
 ```
+
+![mostro_log_search.sh](images/mostro_log_search.png)
 
 ### monitor_tx.sh
 
@@ -125,6 +131,7 @@ python3 test_telegram.py
 .
 ├── .env.example          # Plantilla de configuración
 ├── .gitignore            # Excluye .env, logs y cache
+├── images/               # Capturas de pantalla
 ├── mostro-env.sh         # Configuración compartida (cargado por todos los .sh)
 ├── setup.sh              # Asistente de configuración interactivo
 ├── monitor_tx.sh         # Monitor de transacciones BTC
