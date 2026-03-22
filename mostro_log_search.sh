@@ -1,10 +1,11 @@
 #!/bin/bash
+# ============================================================================
 # mostro_log_search.sh — Busca y formatea logs de Mostro por order ID
 # Uso: ./mostro_log_search.sh <order_id_parcial_o_completo>
-# Ejemplo: ./mostro_log_search.sh a179dca3
-#          ./mostro_log_search.sh a179dca3-ce49-4d59-a47b-5627439b41a5
+# ============================================================================
 
-LOG_FILE="/var/log/mostro.log"
+source "$(dirname "${BASH_SOURCE[0]}")/mostro-env.sh"
+
 ORDER_ID="${1}"
 
 if [ -z "$ORDER_ID" ]; then
@@ -13,37 +14,46 @@ if [ -z "$ORDER_ID" ]; then
     exit 1
 fi
 
-if [ ! -f "$LOG_FILE" ]; then
-    echo "❌ No se encuentra $LOG_FILE"
-    exit 1
+# Determinar fuente de logs
+if [ -n "$MOSTRO_LOG" ] && [ -f "$MOSTRO_LOG" ]; then
+    LOG_SOURCE="$MOSTRO_LOG"
+    RESULTS=$(grep "$ORDER_ID" "$MOSTRO_LOG" 2>/dev/null || true)
+else
+    LOG_SOURCE="journalctl -u $MOSTROD_SERVICE"
+    RESULTS=$(sudo journalctl -u "$MOSTROD_SERVICE" --no-pager 2>/dev/null | grep "$ORDER_ID" || true)
 fi
 
-# Contar coincidencias
-TOTAL=$(grep -c "$ORDER_ID" "$LOG_FILE" 2>/dev/null)
+if [ -z "$RESULTS" ]; then
+    TOTAL=0
+else
+    TOTAL=$(echo "$RESULTS" | wc -l)
+fi
 
 if [ "$TOTAL" -eq 0 ]; then
     echo "❌ No se encontraron entradas para: $ORDER_ID"
     echo ""
     echo "Buscando IDs similares..."
-    # Intentar con la primera parte del UUID
     SHORT=$(echo "$ORDER_ID" | cut -d'-' -f1)
-    grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' "$LOG_FILE" \
-        | grep "$SHORT" | sort -u | head -5
+    if [ -n "$MOSTRO_LOG" ] && [ -f "$MOSTRO_LOG" ]; then
+        grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' "$MOSTRO_LOG" \
+            | grep "$SHORT" | sort -u | head -5
+    else
+        sudo journalctl -u "$MOSTROD_SERVICE" --no-pager 2>/dev/null \
+            | grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' \
+            | grep "$SHORT" | sort -u | head -5
+    fi
     exit 1
 fi
 
 echo "🧌 Mostro Log Search"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "📋 Orden:    $ORDER_ID"
-echo "📄 Archivo:  $LOG_FILE"
+echo "📄 Fuente:   $LOG_SOURCE"
 echo "🔍 Entradas: $TOTAL"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Extraer y mostrar líneas relevantes, ordenadas cronológicamente
-# Colorear niveles: ERROR en rojo, WARN en amarillo, INFO en verde
-grep "$ORDER_ID" "$LOG_FILE" | sort | while IFS= read -r line; do
-    # Intentar extraer timestamp y nivel
+echo "$RESULTS" | sort | while IFS= read -r line; do
     if echo "$line" | grep -qiE "ERROR|FATAL"; then
         echo -e "\033[31m❌ $line\033[0m"
     elif echo "$line" | grep -qi "WARN"; then
@@ -58,10 +68,9 @@ done
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Resumen de niveles
 echo "📊 Resumen:"
 for level in ERROR WARN INFO DEBUG; do
-    count=$(grep "$ORDER_ID" "$LOG_FILE" | grep -ci "$level")
+    count=$(echo "$RESULTS" | grep -ci "$level" || true)
     [ "$count" -gt 0 ] && echo "   $level: $count"
 done
 

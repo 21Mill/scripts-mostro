@@ -1,7 +1,6 @@
 #!/bin/bash
 # ============================================================================
 # mostro-rollback.sh — Restaurar versión anterior de un componente Mostro
-# Ubicación: ~/mostro-sources/scripts/mostro-rollback.sh
 #
 # Uso:
 #   ./mostro-rollback.sh              # Lista backups disponibles
@@ -10,46 +9,38 @@
 # ============================================================================
 
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/mostro-env.sh"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
-
-BACKUP_BASE="$HOME/mostro-sources/backups"
 TARGET="${1:-}"
 
 declare -A BINS=(
-    [mostrod]="/usr/local/bin/mostrod"
-    [mostrix]="/usr/local/bin/mostrix"
-    [mostro-watchdog]="/usr/local/bin/mostro-watchdog"
+    [mostrod]="$MOSTROD_BIN"
+    [mostrix]="$MOSTRIX_BIN"
+    [mostro-watchdog]="$WATCHDOG_BIN"
 )
 
 declare -A CONFIGS=(
-    [mostrod]="/opt/mostro/settings.toml"
-    [mostrix]="$HOME/.mostrix/settings.toml"
-    [mostro-watchdog]="/opt/mostro/config.toml"
+    [mostrod]="$MOSTROD_CONFIG"
+    [mostrix]="$MOSTRIX_CONFIG"
+    [mostro-watchdog]="$WATCHDOG_CONFIG"
 )
 
 declare -A SERVICES=(
-    [mostrod]="mostro.service"
+    [mostrod]="$MOSTROD_SERVICE"
     [mostrix]=""
-    [mostro-watchdog]="mostro-watchdog.service"
+    [mostro-watchdog]="$WATCHDOG_SERVICE"
 )
 
 # Lista backups
 if [ -z "$TARGET" ]; then
     echo -e "${BOLD}${CYAN}🧌 Mostro Rollback — Backups disponibles${NC}\n"
 
-    if [ ! -d "$BACKUP_BASE" ]; then
-        echo -e "${RED}No hay backups en $BACKUP_BASE${NC}"
+    if [ ! -d "$BACKUP_DIR" ]; then
+        echo -e "${RED}No hay backups en $BACKUP_DIR${NC}"
         exit 1
     fi
 
-    for backup in $(ls -rd "$BACKUP_BASE"/*/ 2>/dev/null); do
+    for backup in $(ls -rd "$BACKUP_DIR"/*/ 2>/dev/null); do
         ts=$(basename "$backup")
         echo -e "${BOLD}📦 $ts${NC}"
         for comp in "$backup"*/; do
@@ -78,7 +69,7 @@ case "$TARGET" in
 esac
 
 # Buscar último backup
-LATEST=$(ls -rd "$BACKUP_BASE"/*/"$COMP" 2>/dev/null | head -1)
+LATEST=$(ls -rd "$BACKUP_DIR"/*/"$COMP" 2>/dev/null | head -1)
 
 if [ -z "$LATEST" ] || [ ! -d "$LATEST" ]; then
     echo -e "${RED}No hay backup de $COMP${NC}"
@@ -113,7 +104,7 @@ if [ -f "$LATEST/$BIN_NAME" ]; then
     echo -e "${GREEN}✅ Binario restaurado: ${BINS[$COMP]}${NC}"
 fi
 
-# Restaurar config si existe y el usuario lo quiere
+# Restaurar config
 CONFIG_NAME=$(basename "${CONFIGS[$COMP]}")
 if [ -f "$LATEST/$CONFIG_NAME" ]; then
     echo -en "${BOLD}¿Restaurar también la configuración? [s/N]: ${NC}"
@@ -137,7 +128,6 @@ if [ -n "$SERVICE" ]; then
     fi
 fi
 
-# Verificar versión
 echo ""
 echo -e "${BOLD}Versión restaurada:${NC}"
 "${BINS[$COMP]}" --version 2>/dev/null || echo "(no se pudo obtener versión)"

@@ -1,16 +1,9 @@
 #!/bin/bash
 # ============================================================================
 # mostro-status.sh — Estado de todos los componentes Mostro
-# Ubicación: ~/mostro-sources/scripts/mostro-status.sh
 # ============================================================================
 
-BLUE='\033[0;34m'
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
+source "$(dirname "${BASH_SOURCE[0]}")/mostro-env.sh"
 
 echo -e "${BOLD}${CYAN}"
 echo "🧌 Mostro Status"
@@ -19,7 +12,8 @@ echo -e "${NC}"
 
 # --- Servicios ---
 echo -e "${BOLD}Servicios:${NC}"
-for svc in mostro.service mostro-watchdog.service mostrobot.service; do
+for svc in "$MOSTROD_SERVICE" "$WATCHDOG_SERVICE" "$BOT_SERVICE"; do
+    [ -z "$svc" ] && continue
     name=$(echo "$svc" | sed 's/.service//')
     if sudo systemctl is-active "$svc" &>/dev/null; then
         uptime=$(sudo systemctl show "$svc" --property=ActiveEnterTimestamp --value 2>/dev/null)
@@ -31,27 +25,30 @@ done
 
 echo ""
 
-# --- Versiones instaladas vs disponibles ---
+# --- Versiones ---
 echo -e "${BOLD}Versiones:${NC}"
 
 declare -A SOURCES=(
-    [mostrod]="/opt/mostro"
-    [mostrix]="$HOME/mostro-sources/mostrix"
-    [mostro-watchdog]="$HOME/mostro-sources/mostro-watchdog"
+    [mostrod]="$MOSTROD_SRC"
+    [mostrix]="$MOSTRIX_SRC"
+    [mostro-watchdog]="$WATCHDOG_SRC"
 )
 
 for comp in mostrod mostrix mostro-watchdog; do
     src="${SOURCES[$comp]}"
-    local_ver=$(grep "^version" "$src/Cargo.toml" 2>/dev/null | head -1 | sed 's/.*"\(.*\)"/\1/')
 
-    # Fetch silencioso
-    remote_ver=""
-    if [ -d "$src/.git" ]; then
-        cd "$src"
-        git fetch origin --quiet 2>/dev/null
-        remote_ver=$(git show origin/main:Cargo.toml 2>/dev/null | grep "^version" | head -1 | sed 's/.*"\(.*\)"/\1/')
-        pending=$(git log HEAD..origin/main --oneline 2>/dev/null | wc -l)
+    if ! sudo test -d "$src/.git" 2>/dev/null; then
+        echo -e "  ${BLUE}?${NC} $comp  ${YELLOW}(fuentes no encontradas: $src)${NC}"
+        continue
     fi
+
+    local_ver=$(run_in_dir "$src" "grep '^version' Cargo.toml 2>/dev/null | head -1 | sed 's/.*\"\(.*\)\"/\1/'")
+
+    remote_ver=""
+    pending=0
+    run_in_dir "$src" "git fetch origin --quiet" 2>/dev/null
+    remote_ver=$(run_in_dir "$src" "git show origin/main:Cargo.toml 2>/dev/null | grep '^version' | head -1 | sed 's/.*\"\(.*\)\"/\1/'")
+    pending=$(run_in_dir "$src" "git log HEAD..origin/main --oneline 2>/dev/null | wc -l")
 
     if [ "$local_ver" = "$remote_ver" ]; then
         echo -e "  ${GREEN}✓${NC} $comp  ${BOLD}v$local_ver${NC}  ${GREEN}(actualizado)${NC}"
@@ -66,23 +63,23 @@ echo ""
 
 # --- Base de datos ---
 echo -e "${BOLD}Base de datos:${NC}"
-DB="/zfs_vault/mostro/mostro.db"
-if [ -f "$DB" ]; then
-    size=$(du -h "$DB" 2>/dev/null | cut -f1)
-    mod=$(stat -c %y "$DB" 2>/dev/null | cut -d'.' -f1)
-    trades=$(sudo sqlite3 "$DB" "SELECT COUNT(*) FROM orders WHERE status='success';" 2>/dev/null || echo "?")
-    pending=$(sudo sqlite3 "$DB" "SELECT COUNT(*) FROM orders WHERE status='pending';" 2>/dev/null || echo "?")
+if sudo test -f "$MOSTRO_DB" 2>/dev/null; then
+    size=$(sudo du -h "$MOSTRO_DB" 2>/dev/null | cut -f1)
+    mod=$(sudo stat -c %y "$MOSTRO_DB" 2>/dev/null | cut -d'.' -f1)
+    trades=$(sudo sqlite3 "$MOSTRO_DB" "SELECT COUNT(*) FROM orders WHERE status='success';" 2>/dev/null || echo "?")
+    pending=$(sudo sqlite3 "$MOSTRO_DB" "SELECT COUNT(*) FROM orders WHERE status='pending';" 2>/dev/null || echo "?")
     echo -e "  Tamaño: $size | Modificado: $mod"
     echo -e "  Trades completados: $trades | Pendientes: $pending"
+else
+    echo -e "  ${YELLOW}No encontrada: $MOSTRO_DB${NC}"
 fi
 
 echo ""
 
 # --- Backups ---
-BACKUP_BASE="$HOME/mostro-sources/backups"
-if [ -d "$BACKUP_BASE" ]; then
-    backup_count=$(ls -d "$BACKUP_BASE"/*/ 2>/dev/null | wc -l)
-    backup_size=$(du -sh "$BACKUP_BASE" 2>/dev/null | cut -f1)
+if [ -d "$BACKUP_DIR" ]; then
+    backup_count=$(ls -d "$BACKUP_DIR"/*/ 2>/dev/null | wc -l)
+    backup_size=$(du -sh "$BACKUP_DIR" 2>/dev/null | cut -f1)
     echo -e "${BOLD}Backups:${NC} $backup_count disponibles ($backup_size)"
 fi
 
