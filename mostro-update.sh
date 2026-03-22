@@ -28,16 +28,16 @@ MOSTROD_CONFIG="/opt/mostro/settings.toml"
 MOSTROD_BIN="/usr/local/bin/mostrod"
 MOSTROD_SERVICE="mostro.service"
  
-MOSTRIX_SRC="$HOME/mostro-sources/mostrix"
-MOSTRIX_CONFIG="$HOME/.mostrix/settings.toml"
+MOSTRIX_SRC="/home/admin/mostro-sources/mostrix"
+MOSTRIX_CONFIG="/home/admin/.mostrix/settings.toml"
 MOSTRIX_BIN="/usr/local/bin/mostrix"
  
-WATCHDOG_SRC="$HOME/mostro-sources/mostro-watchdog"
+WATCHDOG_SRC="/home/admin/mostro-sources/mostro-watchdog"
 WATCHDOG_CONFIG="/opt/mostro/config.toml"
 WATCHDOG_BIN="/usr/local/bin/mostro-watchdog"
 WATCHDOG_SERVICE="mostro-watchdog.service"
  
-BACKUP_DIR="$HOME/mostro-sources/backups/$(date +%Y%m%d_%H%M%S)"
+BACKUP_DIR="/home/admin/mostro-sources/backups/$(date +%Y%m%d_%H%M%S)"
 CHECK_ONLY=false
 TARGET=""
  
@@ -66,39 +66,46 @@ log_ok()    { echo -e "${GREEN}✅ ${NC}$1"; }
 log_warn()  { echo -e "${YELLOW}⚠️  ${NC}$1"; }
 log_error() { echo -e "${RED}❌ ${NC}$1"; }
 log_header(){ echo -e "\n${BOLD}${CYAN}━━━ $1 ━━━${NC}\n"; }
+
+# Helper: ejecutar comando en un directorio como su propietario
+run_in_dir() {
+    local dir="$1"
+    shift
+    local owner
+    owner=$(stat -c '%U' "$dir" 2>/dev/null)
+    if [ "$owner" != "$(whoami)" ]; then
+        sudo -u "$owner" bash -c "cd '$dir' && $*"
+    else
+        ( cd "$dir" && eval "$*" )
+    fi
+}
  
 get_local_version() {
     local src_dir="$1"
-    grep "^version" "$src_dir/Cargo.toml" 2>/dev/null | head -1 | sed 's/.*"\(.*\)"/\1/'
+    run_in_dir "$src_dir" "grep '^version' Cargo.toml 2>/dev/null | head -1 | sed 's/.*\"\(.*\)\"/\1/'"
 }
  
 get_remote_version() {
     local src_dir="$1"
-    cd "$src_dir"
-    git fetch origin --tags --quiet 2>/dev/null
-    # Obtener versión del Cargo.toml remoto
-    git show origin/main:Cargo.toml 2>/dev/null | grep "^version" | head -1 | sed 's/.*"\(.*\)"/\1/'
+    run_in_dir "$src_dir" "git fetch origin --tags --quiet 2>/dev/null; git show origin/main:Cargo.toml 2>/dev/null | grep '^version' | head -1 | sed 's/.*\"\(.*\)\"/\1/'"
 }
  
 get_latest_tag() {
     local src_dir="$1"
-    cd "$src_dir"
-    git tag --sort=-v:refname 2>/dev/null | head -1
+    run_in_dir "$src_dir" "git tag --sort=-v:refname 2>/dev/null | head -1"
 }
  
 get_pending_commits() {
     local src_dir="$1"
-    cd "$src_dir"
-    git log HEAD..origin/main --oneline 2>/dev/null
+    run_in_dir "$src_dir" "git log HEAD..origin/main --oneline 2>/dev/null"
 }
  
 check_config_changes() {
     local src_dir="$1"
     local config_example=""
  
-    # Buscar archivo de config de ejemplo
     for f in "settings.tpl.toml" "settings.toml.example" "config.example.toml" "config.toml.example"; do
-        if git show origin/main:"$f" &>/dev/null; then
+        if run_in_dir "$src_dir" "git show origin/main:$f" &>/dev/null; then
             config_example="$f"
             break
         fi
@@ -108,10 +115,9 @@ check_config_changes() {
         return 1
     fi
  
-    # Comprobar si el ejemplo cambió entre la versión actual y la remota
     local local_hash remote_hash
-    local_hash=$(git show HEAD:"$config_example" 2>/dev/null | md5sum | cut -d' ' -f1)
-    remote_hash=$(git show origin/main:"$config_example" 2>/dev/null | md5sum | cut -d' ' -f1)
+    local_hash=$(run_in_dir "$src_dir" "git show HEAD:$config_example 2>/dev/null | md5sum | cut -d' ' -f1")
+    remote_hash=$(run_in_dir "$src_dir" "git show origin/main:$config_example 2>/dev/null | md5sum | cut -d' ' -f1")
  
     if [ "$local_hash" != "$remote_hash" ]; then
         echo "$config_example"
@@ -124,9 +130,8 @@ show_config_diff() {
     local src_dir="$1"
     local config_file="$2"
  
-    cd "$src_dir"
     echo -e "${YELLOW}Cambios en la plantilla de configuración ($config_file):${NC}"
-    git diff HEAD..origin/main -- "$config_file" 2>/dev/null | head -60
+    run_in_dir "$src_dir" "git diff HEAD..origin/main -- $config_file 2>/dev/null | head -60"
     echo ""
 }
  
@@ -137,13 +142,13 @@ backup_component() {
  
     mkdir -p "$BACKUP_DIR/$name"
  
-    if [ -f "$bin" ]; then
-        cp "$bin" "$BACKUP_DIR/$name/" 2>/dev/null && \
+    if sudo test -f "$bin"; then
+        sudo cp "$bin" "$BACKUP_DIR/$name/" 2>/dev/null && \
             log_info "Binario respaldado: $BACKUP_DIR/$name/$(basename $bin)"
     fi
  
-    if [ -f "$config" ]; then
-        cp "$config" "$BACKUP_DIR/$name/" 2>/dev/null && \
+    if sudo test -f "$config"; then
+        sudo cp "$config" "$BACKUP_DIR/$name/" 2>/dev/null && \
             log_info "Config respaldada: $BACKUP_DIR/$name/$(basename $config)"
     fi
 }
@@ -152,12 +157,11 @@ build_rust_component() {
     local src_dir="$1"
     local name="$2"
  
-    cd "$src_dir"
     log_info "Descargando cambios..."
-    git pull --quiet
+    run_in_dir "$src_dir" "git pull --quiet"
  
     log_info "Compilando $name (esto puede tardar unos minutos)..."
-    if cargo build --release 2>&1 | tail -5; then
+    if run_in_dir "$src_dir" "cargo build --release 2>&1 | tail -5"; then
         log_ok "Compilación exitosa"
         return 0
     else
@@ -172,7 +176,7 @@ install_binary() {
     local dest="$3"
  
     local src_bin="$src_dir/target/release/$bin_name"
-    if [ ! -f "$src_bin" ]; then
+    if ! sudo test -f "$src_bin"; then
         log_error "Binario no encontrado: $src_bin"
         return 1
     fi
@@ -219,7 +223,7 @@ update_component() {
  
     log_header "$name"
  
-    if [ ! -d "$src_dir/.git" ]; then
+    if ! sudo test -d "$src_dir/.git"; then
         log_error "Directorio de fuentes no encontrado: $src_dir"
         return 1
     fi
@@ -239,7 +243,6 @@ update_component() {
     if [ "$local_ver" = "$remote_ver" ]; then
         log_ok "$name está actualizado"
  
-        # Aún así mostrar si hay commits nuevos sin release
         local pending
         pending=$(get_pending_commits "$src_dir")
         if [ -n "$pending" ]; then
@@ -256,7 +259,6 @@ update_component() {
     echo ""
     log_warn "Actualización disponible: $local_ver → $remote_ver"
  
-    # Mostrar commits pendientes
     local pending
     pending=$(get_pending_commits "$src_dir")
     if [ -n "$pending" ]; then
@@ -265,7 +267,6 @@ update_component() {
     fi
  
     # Comprobar cambios en config
-    cd "$src_dir"
     local changed_config
     if changed_config=$(check_config_changes "$src_dir"); then
         echo ""
