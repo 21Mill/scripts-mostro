@@ -3,11 +3,17 @@
 #
 # Uso: ./monitor_tx.sh <txid>
 #
-TELEGRAM_BOT_TOKEN="tu_token_aqui"
-TELEGRAM_CHAT_ID="tu_id_aqui"
-CHECK_INTERVAL=60
 
-# --- Valores por defecto ---
+# --- Cargar variables de entorno ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/.env" ]; then
+  set -a
+  source "$SCRIPT_DIR/.env"
+  set +a
+fi
+
+TELEGRAM_BOT_TOKEN="${TELEGRAM_TOKEN}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID}"
 CHECK_INTERVAL=${CHECK_INTERVAL:-60}
 
 # --- Validaciones ---
@@ -47,7 +53,7 @@ check_tx() {
   fi
 
   local CONFIRMED
-  CONFIRMED=$(echo "$RESPONSE" | jq -r '.status.confirmed' 2>/dev/null)
+  CONFIRMED=$(echo "$RESPONSE" | jq -r '\.status.confirmed' 2>/dev/null)
 
   if [ "$CONFIRMED" == "true" ]; then
     BLOCK_HEIGHT=$(echo "$RESPONSE" | jq -r '.status.block_height' 2>/dev/null)
