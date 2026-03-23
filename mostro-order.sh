@@ -15,7 +15,14 @@ if [[ -z "$1" ]]; then
     echo "  $(basename "$0") --recent        (ultimas 10 ordenes)"
     echo "  $(basename "$0") --pending       (ordenes pendientes)"
     echo "  $(basename "$0") --active        (ordenes en curso)"
-    echo "  $(basename "$0") --stats         (estadisticas generales)"
+    echo "  $(basename "$0") --stats         (estadisticas - todo el historial)"
+    echo "  $(basename "$0") --stats 7d      (estadisticas - ultima semana)"
+    echo "  $(basename "$0") --stats 30d     (estadisticas - ultimo mes)"
+    echo "  $(basename "$0") --stats 2026-03-01..2026-03-23  (entre dos fechas)"
+    echo ""
+    echo -e "${CYAN}Periodos para --stats:${NC}"
+    echo "  today/hoy, 24h, 7d/week/semana, 30d/month/mes,"
+    echo "  90d/trimestre, year/año, YYYY-MM-DD, YYYY-MM-DD..YYYY-MM-DD"
     exit 1
 fi
 
@@ -123,26 +130,89 @@ format_status() {
 
 # --stats
 if [[ "$1" == "--stats" ]]; then
-    echo -e "${BOLD}${CYAN}═══ Estadisticas de Mostro ═══${NC}"
+    # Parsear filtro de tiempo
+    TIME_FILTER=""
+    PERIOD_LABEL="(todo el historial)"
+    shift
+    if [[ -n "$1" ]]; then
+        case "$1" in
+            today|hoy)
+                SINCE=$(date -d "today 00:00:00" +%s)
+                PERIOD_LABEL="(hoy)"
+                ;;
+            24h)
+                SINCE=$(( $(date +%s) - 86400 ))
+                PERIOD_LABEL="(ultimas 24h)"
+                ;;
+            7d|week|semana)
+                SINCE=$(( $(date +%s) - 604800 ))
+                PERIOD_LABEL="(ultima semana)"
+                ;;
+            30d|month|mes)
+                SINCE=$(( $(date +%s) - 2592000 ))
+                PERIOD_LABEL="(ultimo mes)"
+                ;;
+            90d|3months|trimestre)
+                SINCE=$(( $(date +%s) - 7776000 ))
+                PERIOD_LABEL="(ultimo trimestre)"
+                ;;
+            year|año)
+                SINCE=$(( $(date +%s) - 31536000 ))
+                PERIOD_LABEL="(ultimo año)"
+                ;;
+            *..*)
+                # Rango: 2026-03-01..2026-03-23
+                DATE_FROM="${1%..*}"
+                DATE_TO="${1#*..}"
+                SINCE=$(date -d "$DATE_FROM 00:00:00" +%s 2>/dev/null)
+                UNTIL=$(date -d "$DATE_TO 23:59:59" +%s 2>/dev/null)
+                if [[ -z "$SINCE" || -z "$UNTIL" ]]; then
+                    echo -e "${RED}Error:${NC} Formato de fechas invalido. Usa: YYYY-MM-DD..YYYY-MM-DD"
+                    exit 1
+                fi
+                PERIOD_LABEL="($DATE_FROM a $DATE_TO)"
+                TIME_FILTER="WHERE created_at >= $SINCE AND created_at <= $UNTIL"
+                ;;
+            *)
+                # Intentar como fecha unica (desde esa fecha hasta ahora)
+                SINCE=$(date -d "$1 00:00:00" +%s 2>/dev/null)
+                if [[ -z "$SINCE" ]]; then
+                    echo -e "${RED}Error:${NC} Periodo no reconocido: $1"
+                    echo -e "${CYAN}Opciones:${NC} today, 24h, 7d, 30d, 90d, year, YYYY-MM-DD, YYYY-MM-DD..YYYY-MM-DD"
+                    exit 1
+                fi
+                PERIOD_LABEL="(desde $1)"
+                ;;
+        esac
+        # Si no se uso rango (..), construir filtro solo con SINCE
+        if [[ -z "$TIME_FILTER" && -n "$SINCE" ]]; then
+            TIME_FILTER="WHERE created_at >= $SINCE"
+        fi
+    fi
+
+    echo -e "${BOLD}${CYAN}═══ Estadisticas de Mostro $PERIOD_LABEL ═══${NC}"
     echo ""
     stats=$(run_sql "$DB_PATH" -separator '|' "
         SELECT
             COUNT(*) as total,
             SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) as completadas,
             SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) as pendientes,
-            SUM(CASE WHEN status LIKE 'canceled%' THEN 1 ELSE 0 END) as canceladas,
+            SUM(CASE WHEN status LIKE 'canceled%' OR status='cooperatively-canceled' THEN 1 ELSE 0 END) as canceladas,
             SUM(CASE WHEN status='expired' THEN 1 ELSE 0 END) as expiradas,
             SUM(CASE WHEN status='dispute' THEN 1 ELSE 0 END) as disputas,
-            SUM(CASE WHEN status NOT IN ('success','pending','canceled','canceled-by-admin','expired','dispute') THEN 1 ELSE 0 END) as en_curso,
+            SUM(CASE WHEN status NOT IN ('success','pending','canceled','canceled-by-admin','cooperatively-canceled','expired','dispute') THEN 1 ELSE 0 END) as en_curso,
             SUM(CASE WHEN status='success' THEN amount ELSE 0 END) as total_sats,
             SUM(CASE WHEN status='success' THEN fee ELSE 0 END) as total_fees,
             SUM(CASE WHEN status='success' THEN routing_fee ELSE 0 END) as total_routing,
             SUM(CASE WHEN status='success' THEN dev_fee ELSE 0 END) as total_dev_fee,
             SUM(CASE WHEN status='success' AND kind='buy' THEN 1 ELSE 0 END) as buys_ok,
-            SUM(CASE WHEN status='success' AND kind='sell' THEN 1 ELSE 0 END) as sells_ok
-        FROM orders
+            SUM(CASE WHEN status='success' AND kind='sell' THEN 1 ELSE 0 END) as sells_ok,
+            SUM(CASE WHEN status='success' THEN fiat_amount ELSE 0 END) as total_fiat,
+            MIN(CASE WHEN status='success' THEN created_at END) as first_trade,
+            MAX(CASE WHEN status='success' THEN created_at END) as last_trade
+        FROM orders $TIME_FILTER
     ")
-    IFS='|' read -r total completadas pendientes canceladas expiradas disputas en_curso total_sats total_fees total_routing total_dev_fee buys_ok sells_ok <<< "$stats"
+    IFS='|' read -r total completadas pendientes canceladas expiradas disputas en_curso total_sats total_fees total_routing total_dev_fee buys_ok sells_ok total_fiat first_trade last_trade <<< "$stats"
 
     echo -e "  ${BOLD}Ordenes${NC}"
     echo -e "  Total:         $total"
@@ -152,22 +222,36 @@ if [[ "$1" == "--stats" ]]; then
     echo -e "  Canceladas:    ${RED}$canceladas${NC}"
     echo -e "  Expiradas:     ${DIM}$expiradas${NC}"
     [[ "$disputas" != "0" ]] && echo -e "  Disputas:      ${RED}$disputas${NC}"
+    if [[ "$total" != "0" && "$completadas" != "0" ]]; then
+        tasa=$(( completadas * 100 / total ))
+        echo -e "  Tasa exito:    ${GREEN}${tasa}%${NC}"
+    fi
     echo ""
     echo -e "  ${BOLD}Volumen (ordenes completadas)${NC}"
     echo -e "  Total sats:    $(format_sats "$total_sats")"
+    [[ "$total_fiat" != "0" && "$total_fiat" != "" ]] && echo -e "  Total fiat:    $total_fiat (suma de fiat_amount)"
     echo -e "  Fees cobradas: $(format_sats "$total_fees")"
     [[ "$total_routing" != "0" ]] && echo -e "  Routing fees:  $(format_sats "$total_routing")"
     [[ "$total_dev_fee" != "0" ]] && echo -e "  Dev fees:      $(format_sats "$total_dev_fee")"
+    if [[ -n "$first_trade" && "$first_trade" != "" ]]; then
+        echo -e "  Primer trade:  $(format_timestamp "$first_trade")"
+        echo -e "  Ultimo trade:  $(format_timestamp "$last_trade")"
+    fi
     echo ""
 
     # Monedas usadas
     monedas=$(run_sql "$DB_PATH" -separator '|' "
-        SELECT fiat_code, COUNT(*) as n, SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) as ok
-        FROM orders GROUP BY fiat_code ORDER BY n DESC
+        SELECT fiat_code, COUNT(*) as n,
+            SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) as ok,
+            SUM(CASE WHEN status='success' THEN fiat_amount ELSE 0 END) as vol_fiat,
+            SUM(CASE WHEN status='success' THEN amount ELSE 0 END) as vol_sats
+        FROM orders $TIME_FILTER GROUP BY fiat_code ORDER BY n DESC
     ")
     echo -e "  ${BOLD}Monedas${NC}"
-    while IFS='|' read -r code n ok; do
-        echo -e "  $code: $n ordenes ($ok completadas)"
+    while IFS='|' read -r code n ok vol_fiat vol_sats; do
+        extra=""
+        [[ "$ok" != "0" && "$vol_fiat" != "0" ]] && extra=" — vol: $vol_fiat $code / $(format_sats "$vol_sats")"
+        echo -e "  $code: $n ordenes ($ok completadas$extra)"
     done <<< "$monedas"
     echo ""
 
@@ -246,7 +330,7 @@ if [[ "$1" == "--active" ]]; then
     results=$(run_sql "$DB_PATH" -separator '|' "
         SELECT $UUID_SQL, kind, status, fiat_code, fiat_amount, min_amount, max_amount, amount, payment_method, taken_at, created_at
         FROM orders
-        WHERE status NOT IN ('pending','success','canceled','canceled-by-admin','expired')
+        WHERE status NOT IN ('pending','success','canceled','canceled-by-admin','cooperatively-canceled','expired')
         ORDER BY created_at DESC
     ")
     if [[ -z "$results" ]]; then

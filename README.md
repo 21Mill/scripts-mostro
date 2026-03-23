@@ -105,8 +105,13 @@ Muestra: tipo, estado, montos (incluyendo fiat final en órdenes con rango), com
 ./mostro-order.sh --recent         # Últimas 10 órdenes
 ./mostro-order.sh --pending        # Órdenes pendientes activas
 ./mostro-order.sh --active         # Órdenes en curso (tomadas, no finalizadas)
-./mostro-order.sh --stats          # Estadísticas generales del nodo
+./mostro-order.sh --stats          # Estadísticas generales (todo el historial)
+./mostro-order.sh --stats 7d       # Estadísticas de la última semana
+./mostro-order.sh --stats 30d      # Estadísticas del último mes
+./mostro-order.sh --stats 2026-03-01..2026-03-23  # Entre dos fechas
 ```
+
+Periodos disponibles para `--stats`: `today`/`hoy`, `24h`, `7d`/`week`/`semana`, `30d`/`month`/`mes`, `90d`/`trimestre`, `year`/`año`, `YYYY-MM-DD` (desde fecha), `YYYY-MM-DD..YYYY-MM-DD` (rango).
 
 ### mostro_bot.py
 
