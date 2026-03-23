@@ -2,3 +2,6 @@
 app.log
 __pycache__/
 *.pyc
+orders.json
+orders_nostr.json
+.env.bak
