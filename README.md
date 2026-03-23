@@ -95,15 +95,17 @@ Muestra el estado completo del nodo: servicios activos, versiones instaladas vs 
 
 ### mostro-order.sh
 
-Consulta todos los datos de una orden en la base de datos de Mostro. Soporta búsqueda por UUID completo o parcial, y modos especiales para listar órdenes recientes o pendientes.
+Consulta todos los datos de una orden en la base de datos de Mostro. Soporta búsqueda por UUID completo o parcial, y modos especiales para listar órdenes recientes, pendientes, en curso o estadísticas generales.
 
-Muestra: tipo, estado, montos, comisiones (fee/routing/dev), participantes (pubkeys), datos Lightning (hash/preimage/invoice), disputas, valoraciones, tiempos y trade index.
+Muestra: tipo, estado, montos (incluyendo fiat final en órdenes con rango), comisiones (fee/routing/dev con totales), participantes (pubkeys), datos Lightning (hash/preimage/invoice), disputas, valoraciones, tiempos (con duración del trade) y trade index.
 
 ```bash
 ./mostro-order.sh <order_id>       # Consultar una orden (UUID completo)
 ./mostro-order.sh 7361b8fe         # Buscar por UUID parcial
 ./mostro-order.sh --recent         # Últimas 10 órdenes
 ./mostro-order.sh --pending        # Órdenes pendientes activas
+./mostro-order.sh --active         # Órdenes en curso (tomadas, no finalizadas)
+./mostro-order.sh --stats          # Estadísticas generales del nodo
 ```
 
 ### mostro_bot.py
