@@ -21,7 +21,7 @@ cp .env.example .env
 # Edita .env con tus valores
 ```
 
-Los valores comentados en `.env.example` muestran los defaults. Solo necesitas descomentar y cambiar los que difieran en tu instalación. Las variables de Telegram y Nostr sí son obligatorias si usas el bot.
+Los valores comentados en `.env.example` muestran los defaults. Solo necesitas descomentar y cambiar los que difieran en tu instalación. Las variables de Telegram y Nostr sí son obligatorias si usas los bots.
 
 ### Variables de entorno
 
@@ -41,12 +41,14 @@ Los valores comentados en `.env.example` muestran los defaults. Solo necesitas d
 | `BACKUP_DIR` | `~/mostro-sources/backups` | Directorio de backups |
 | `MOSTRO_DB` | `$MOSTROD_SRC/mostro.db` | Base de datos SQLite |
 | `MOSTRO_LOG` | *(vacío = journalctl)* | Archivo de log |
-| `BOT_SERVICE` | `mostrobot.service` | Servicio del bot |
+| `BOT_SERVICE` | `mostrobot.service` | Servicio del bot de Telegram |
 | `TELEGRAM_TOKEN` | — | Token del bot de Telegram |
 | `TELEGRAM_CHAT_ID` | — | Chat ID para ofertas |
 | `TELEGRAM_TEST_CHAT_ID` | — | Chat ID para pruebas |
 | `MOSTRO_PUBKEY` | — | Clave pública del nodo Mostro |
 | `MOSTRO_RELAY` | `wss://relay.mostro.network` | URL del relay Nostr |
+| `NOSTR_BOT_NSEC` | *(se genera automáticamente)* | Clave privada del bot de Nostr |
+| `NOSTR_BOT_RELAYS` | `wss://relay.damus.io,wss://nos.lol,wss://relay.mostro.network` | Relays donde publicar ofertas |
 
 ## Scripts
 
@@ -91,12 +93,22 @@ Muestra el estado completo del nodo: servicios activos, versiones instaladas vs 
 
 ### mostro_bot.py
 
-Bot que escucha nuevas ofertas en el relay de Mostro y las publica en un canal de Telegram.
+Bot que escucha nuevas ofertas en el relay de Mostro y las publica en un canal de Telegram. Cuando una oferta es tomada, cancelada o expira, el mensaje se borra automáticamente del canal.
 
 **Dependencias:** `pip install websocket-client requests python-dotenv`
 
 ```bash
 python3 mostro_bot.py
+```
+
+### mostro_bot_nostr.py
+
+Bot que publica las ofertas como notas (kind 1) en Nostr desde un pubkey dedicado. Cuando una oferta deja de estar pendiente, envía un evento de borrado (NIP-09, kind 5). Si no existe un `NOSTR_BOT_NSEC` en el `.env`, genera las claves automáticamente.
+
+**Dependencias:** `pip install websocket-client pynostr python-dotenv`
+
+```bash
+python3 mostro_bot_nostr.py
 ```
 
 ### mostro_log_search.sh
@@ -125,20 +137,38 @@ Script de prueba para verificar las credenciales de Telegram.
 python3 test_telegram.py
 ```
 
+## Arquitectura de los bots
+
+Los bots de Telegram y Nostr comparten un módulo común (`mostro_common.py`) que contiene:
+
+- Conexión WebSocket al relay de Mostro
+- Parsing de eventos kind 38383 (ofertas)
+- Formateo de texto (HTML para Telegram, plano para Nostr)
+- Persistencia de órdenes publicadas (JSON)
+
+Cada bot se ejecuta como un servicio systemd independiente:
+
+| Servicio | Bot | Plataforma |
+|----------|-----|------------|
+| `mostrobot.service` | `mostro_bot.py` | Telegram |
+| `mostrobot-nostr.service` | `mostro_bot_nostr.py` | Nostr |
+
 ## Estructura
 
 ```
 .
-├── .env.example          # Plantilla de configuración
-├── .gitignore            # Excluye .env, logs y cache
-├── images/               # Capturas de pantalla
-├── mostro-env.sh         # Configuración compartida (cargado por todos los .sh)
-├── setup.sh              # Asistente de configuración interactivo
-├── monitor_tx.sh         # Monitor de transacciones BTC
-├── mostro-rollback.sh    # Rollback de componentes
-├── mostro-status.sh      # Estado del nodo
-├── mostro-update.sh      # Actualización de componentes
-├── mostro_bot.py         # Bot de ofertas para Telegram
-├── mostro_log_search.sh  # Búsqueda en logs
-└── test_telegram.py      # Test de Telegram
+├── .env.example            # Plantilla de configuración
+├── .gitignore              # Excluye .env, logs, orders y cache
+├── images/                 # Capturas de pantalla
+├── mostro-env.sh           # Configuración compartida (cargado por todos los .sh)
+├── mostro_common.py        # Módulo compartido por los bots Python
+├── setup.sh                # Asistente de configuración interactivo
+├── monitor_tx.sh           # Monitor de transacciones BTC
+├── mostro-rollback.sh      # Rollback de componentes
+├── mostro-status.sh        # Estado del nodo
+├── mostro-update.sh        # Actualización de componentes
+├── mostro_bot.py           # Bot de ofertas para Telegram
+├── mostro_bot_nostr.py     # Bot de ofertas para Nostr
+├── mostro_log_search.sh    # Búsqueda en logs
+└── test_telegram.py        # Test de Telegram
 ```
