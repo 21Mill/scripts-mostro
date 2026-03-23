@@ -13,12 +13,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from mostro_common import (
+    MOSTRO_PUBKEY, RELAY,
     parsear_oferta, formato_texto, cargar_ordenes, guardar_ordenes, conectar_relay
 )
 
 # --- Configuración ---
 NOSTR_NSEC = os.getenv("NOSTR_BOT_NSEC", "")
-NOSTR_RELAYS = os.getenv("NOSTR_BOT_RELAYS", "wss://relay.damus.io,wss://nos.lol,wss://relay.mostro.network")
+NOSTR_RELAYS = os.getenv("NOSTR_BOT_RELAYS", "wss://relay.kilombino.com,wss://relay.damus.io,wss://nos.lol,wss://relay.mostro.network")
 
 SCRIPT_DIR = Path(__file__).parent
 ORDERS_FILE = SCRIPT_DIR / "orders_nostr.json"
@@ -97,6 +98,46 @@ def borrar_nota(event_id):
     publicar_evento(evento)
 
 
+def scan_inicial():
+    """Escanea el relay para publicar órdenes pending que el bot no haya visto."""
+    global ordenes_publicadas
+    print("🔍 Escaneando órdenes pending existentes...")
+    try:
+        ws = ws_client.create_connection(RELAY, timeout=15)
+        ws.send(json.dumps(["REQ", "scan", {
+            "kinds": [38383],
+            "authors": [MOSTRO_PUBKEY],
+            "since": int(time.time()) - 86400
+        }]))
+
+        pending = []
+        for _ in range(500):
+            resp = json.loads(ws.recv())
+            if resp[0] == "EVENT":
+                oferta = parsear_oferta(resp[2])
+                if oferta and oferta["estado"] == "pending":
+                    pending.append(oferta)
+            if resp[0] == "EOSE":
+                break
+        ws.close()
+
+        nuevas = 0
+        for oferta in pending:
+            order_id = oferta["order_id"]
+            if order_id not in ordenes_publicadas:
+                texto = formato_texto(oferta, html=False)
+                event_id = publicar_nota(texto)
+                if event_id:
+                    ordenes_publicadas[order_id] = event_id
+                    guardar_ordenes(ORDERS_FILE, ordenes_publicadas)
+                    nuevas += 1
+                    time.sleep(1)
+
+        print(f"✅ Scan completado: {len(pending)} pending, {nuevas} nuevas publicadas")
+    except Exception as e:
+        print(f"⚠️ Error en scan inicial: {e}")
+
+
 def procesar_mensaje(ws, mensaje):
     global ordenes_publicadas
     try:
@@ -138,4 +179,5 @@ if __name__ == "__main__":
     print(f"🔑 npub: {private_key.public_key.bech32()}")
     print(f"📡 Relays: {', '.join(relay_list)}")
     print(f"📋 Ofertas cargadas: {len(ordenes_publicadas)}")
+    scan_inicial()
     conectar_relay(procesar_mensaje)

@@ -6,6 +6,7 @@ Contiene la conexión al relay, parsing de ofertas y persistencia.
 import json
 import os
 import time
+import threading
 import websocket
 from datetime import datetime, timezone
 from pathlib import Path
@@ -168,53 +169,21 @@ def formato_texto(oferta, html=False):
     return "\n".join(lineas)
 
 
-    if tipo == "BUY":
-        hashtag = "#ComprarBitcoin"
-        emoji = "🟢"
-    else:
-        hashtag = "#VenderBitcoin"
-        emoji = "🔴"
-
-    premium = oferta["premium"]
-    try:
-        p = float(premium)
-        if p > 0:
-            prem_txt = f"📈 +{premium}%"
-        elif p < 0:
-            prem_txt = f"📉 {premium}%"
-        else:
-            prem_txt = "📊 Precio de mercado"
-    except ValueError:
-        prem_txt = f"📊 {premium}%"
-
-    fiat = oferta["monto_fiat"]
-    moneda = oferta["fiat"]
-    metodos = oferta["metodos"]
-
-    texto = (
-        f"{emoji} {hashtag}\n\n"
-        f"💰 {fiat} {moneda}\n"
-        f"{prem_txt}\n"
-        f"🏦 {metodos}\n\n"
-        f"🧌 Mostro P2P — Exchange sin KYC vía ⚡\n\n"
-        f"#MostroP2P #Bitcoin #P2P"
-    )
-
-    return texto[:280]
-
-
 def conectar_relay(on_message, on_open_extra=None):
-    """Conecta al relay de Mostro y escucha eventos."""
+    """Conecta al relay de Mostro y escucha eventos con keepalive."""
+
+    last_connected = [0]
 
     def al_abrir(ws):
+        since = last_connected[0] if last_connected[0] > 0 else int(time.time()) - 300
+        last_connected[0] = int(time.time())
         print(f"📡 Conectado a {RELAY}")
-        ahora = int(time.time()) - 60
         suscripcion = [
             "REQ", "mostro_listener",
             {
                 "kinds": [38383],
                 "authors": [MOSTRO_PUBKEY],
-                "since": ahora
+                "since": since
             }
         ]
         ws.send(json.dumps(suscripcion))
@@ -237,7 +206,7 @@ def conectar_relay(on_message, on_open_extra=None):
                 on_close=al_cerrar,
                 on_error=al_error
             )
-            ws.run_forever(ping_interval=30, ping_timeout=10)
+            ws.run_forever(ping_interval=20, ping_timeout=10)
         except Exception as e:
             print(f"❌ Error fatal: {e}. Reintentando en 10s...")
             time.sleep(10)

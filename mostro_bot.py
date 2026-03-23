@@ -5,13 +5,16 @@ Borra los mensajes cuando las ofertas son tomadas.
 
 import json
 import os
+import time
 import requests
+import websocket as ws_client
 from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from mostro_common import (
+    MOSTRO_PUBKEY, RELAY,
     parsear_oferta, formato_texto, cargar_ordenes, guardar_ordenes, conectar_relay
 )
 
@@ -67,6 +70,48 @@ def borrar_telegram(message_id):
     return False
 
 
+# --- Scan inicial ---
+
+def scan_inicial():
+    """Escanea el relay para publicar órdenes pending que el bot no haya visto."""
+    global ordenes_publicadas
+    print("🔍 Escaneando órdenes pending existentes...")
+    try:
+        ws = ws_client.create_connection(RELAY, timeout=15)
+        ws.send(json.dumps(["REQ", "scan", {
+            "kinds": [38383],
+            "authors": [MOSTRO_PUBKEY],
+            "since": int(time.time()) - 86400
+        }]))
+
+        pending = []
+        for _ in range(500):
+            resp = json.loads(ws.recv())
+            if resp[0] == "EVENT":
+                oferta = parsear_oferta(resp[2])
+                if oferta and oferta["estado"] == "pending":
+                    pending.append(oferta)
+            if resp[0] == "EOSE":
+                break
+        ws.close()
+
+        nuevas = 0
+        for oferta in pending:
+            order_id = oferta["order_id"]
+            if order_id not in ordenes_publicadas:
+                texto = formato_texto(oferta, html=True)
+                message_id = enviar_telegram(texto)
+                if message_id:
+                    ordenes_publicadas[order_id] = message_id
+                    guardar_ordenes(ORDERS_FILE, ordenes_publicadas)
+                    nuevas += 1
+                    time.sleep(1)
+
+        print(f"✅ Scan completado: {len(pending)} pending, {nuevas} nuevas publicadas")
+    except Exception as e:
+        print(f"⚠️ Error en scan inicial: {e}")
+
+
 # --- Procesar ofertas ---
 
 def procesar_mensaje(ws, mensaje):
@@ -110,4 +155,5 @@ def procesar_mensaje(ws, mensaje):
 if __name__ == "__main__":
     print("🧌 Mostro Bot Telegram iniciado")
     print(f"📋 Ofertas cargadas: {len(ordenes_publicadas)}")
+    scan_inicial()
     conectar_relay(procesar_mensaje)

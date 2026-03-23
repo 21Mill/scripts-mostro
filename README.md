@@ -39,7 +39,9 @@ Los valores comentados en `.env.example` muestran los defaults. Solo necesitas d
 | `WATCHDOG_BIN` | `/usr/local/bin/mostro-watchdog` | Binario del watchdog |
 | `WATCHDOG_SERVICE` | `mostro-watchdog.service` | Servicio systemd |
 | `BACKUP_DIR` | `~/mostro-sources/backups` | Directorio de backups |
-| `MOSTRO_DB` | `$MOSTROD_SRC/mostro.db` | Base de datos SQLite |
+| `MOSTRO_DB` | `$MOSTROD_SRC/mostro.db` | Base de datos SQLite de órdenes |
+| `MOSTRO_DISPUTES_DB` | `/opt/mostro/disputes.db` | Base de datos SQLite de disputas |
+| `MOSTRO_USER` | `mostro` | Usuario del sistema que ejecuta mostrod |
 | `MOSTRO_LOG` | *(vacío = journalctl)* | Archivo de log |
 | `BOT_SERVICE` | `mostrobot.service` | Servicio del bot de Telegram |
 | `TELEGRAM_TOKEN` | — | Token del bot de Telegram |
@@ -91,9 +93,22 @@ Muestra el estado completo del nodo: servicios activos, versiones instaladas vs 
 
 ![mostro-status.sh](images/mostro-status.png)
 
+### mostro-order.sh
+
+Consulta todos los datos de una orden en la base de datos de Mostro. Soporta búsqueda por UUID completo o parcial, y modos especiales para listar órdenes recientes o pendientes.
+
+Muestra: tipo, estado, montos, comisiones (fee/routing/dev), participantes (pubkeys), datos Lightning (hash/preimage/invoice), disputas, valoraciones, tiempos y trade index.
+
+```bash
+./mostro-order.sh <order_id>       # Consultar una orden (UUID completo)
+./mostro-order.sh 7361b8fe         # Buscar por UUID parcial
+./mostro-order.sh --recent         # Últimas 10 órdenes
+./mostro-order.sh --pending        # Órdenes pendientes activas
+```
+
 ### mostro_bot.py
 
-Bot que escucha nuevas ofertas en el relay de Mostro y las publica en un canal de Telegram. Cuando una oferta es tomada, cancelada o expira, el mensaje se borra automáticamente del canal.
+Bot que escucha nuevas ofertas en el relay de Mostro y las publica en un canal de Telegram. Cuando una oferta es tomada, cancelada o expira, el mensaje se borra automáticamente del canal. Al arrancar, escanea todas las órdenes pendientes de las últimas 24h para publicar las que no hayan sido vistas.
 
 **Dependencias:** `pip install websocket-client requests python-dotenv`
 
@@ -103,7 +118,7 @@ python3 mostro_bot.py
 
 ### mostro_bot_nostr.py
 
-Bot que publica las ofertas como notas (kind 1) en Nostr desde un pubkey dedicado. Cuando una oferta deja de estar pendiente, envía un evento de borrado (NIP-09, kind 5). Si no existe un `NOSTR_BOT_NSEC` en el `.env`, genera las claves automáticamente.
+Bot que publica las ofertas como notas (kind 1) en Nostr desde un pubkey dedicado. Cuando una oferta deja de estar pendiente, envía un evento de borrado (NIP-09, kind 5). Si no existe un `NOSTR_BOT_NSEC` en el `.env`, genera las claves automáticamente. Al arrancar, escanea todas las órdenes pendientes para no perder ofertas creadas antes del inicio del bot.
 
 **Dependencias:** `pip install websocket-client pynostr python-dotenv`
 
@@ -141,7 +156,7 @@ python3 test_telegram.py
 
 Los bots de Telegram y Nostr comparten un módulo común (`mostro_common.py`) que contiene:
 
-- Conexión WebSocket al relay de Mostro
+- Conexión WebSocket al relay de Mostro con keepalive y reconexión automática
 - Parsing de eventos kind 38383 (ofertas)
 - Formateo de texto (HTML para Telegram, plano para Nostr)
 - Persistencia de órdenes publicadas (JSON)
@@ -164,6 +179,7 @@ Cada bot se ejecuta como un servicio systemd independiente:
 ├── mostro_common.py        # Módulo compartido por los bots Python
 ├── setup.sh                # Asistente de configuración interactivo
 ├── monitor_tx.sh           # Monitor de transacciones BTC
+├── mostro-order.sh         # Consulta de órdenes en base de datos
 ├── mostro-rollback.sh      # Rollback de componentes
 ├── mostro-status.sh        # Estado del nodo
 ├── mostro-update.sh        # Actualización de componentes
