@@ -1,5 +1,5 @@
 """
-mostro_bot.py — Publica ofertas de Mostro en un canal de Telegram.
+bot.py — Publica ofertas de Mostro en un canal de Telegram.
 Borra los mensajes cuando las ofertas son tomadas.
 """
 
@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from mostro_common import (
+from common import (
     MOSTRO_PUBKEY, RELAY,
     parsear_oferta, formato_texto, cargar_ordenes, guardar_ordenes, conectar_relay
 )

@@ -11,7 +11,7 @@
 # ============================================================================
 
 set -euo pipefail
-source "$(dirname "${BASH_SOURCE[0]}")/mostro-env.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 
 BACKUP_TS="$BACKUP_DIR/$(date +%Y%m%d_%H%M%S)"
 CHECK_ONLY=false

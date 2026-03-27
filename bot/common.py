@@ -1,5 +1,5 @@
 """
-mostro_common.py — Módulo compartido por los bots de Mostro.
+common.py — Módulo compartido por los bots de Mostro.
 Contiene la conexión al relay, parsing de ofertas y persistencia.
 """
 

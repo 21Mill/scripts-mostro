@@ -1,10 +1,10 @@
 #!/bin/bash
 # ============================================================================
-# mostro_log_search.sh — Busca y formatea logs de Mostro por order ID
-# Uso: ./mostro_log_search.sh <order_id_parcial_o_completo>
+# logs.sh — Busca y formatea logs de Mostro por order ID
+# Uso: ./logs.sh <order_id_parcial_o_completo>
 # ============================================================================
 
-source "$(dirname "${BASH_SOURCE[0]}")/mostro-env.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../admin/env.sh"
 
 ORDER_ID="${1}"
 

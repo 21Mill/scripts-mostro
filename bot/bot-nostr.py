@@ -1,5 +1,5 @@
 """
-mostro_bot_nostr.py — Publica ofertas de Mostro como notas en Nostr.
+bot-nostr.py — Publica ofertas de Mostro como notas en Nostr.
 Borra las notas cuando las ofertas son tomadas (NIP-09).
 """
 
@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from mostro_common import (
+from common import (
     MOSTRO_PUBKEY, RELAY,
     parsear_oferta, formato_texto, cargar_ordenes, guardar_ordenes, conectar_relay
 )

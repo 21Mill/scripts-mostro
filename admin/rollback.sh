@@ -9,7 +9,7 @@
 # ============================================================================
 
 set -euo pipefail
-source "$(dirname "${BASH_SOURCE[0]}")/mostro-env.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 
 TARGET="${1:-}"
 

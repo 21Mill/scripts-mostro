@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# mostro-order.sh — Consulta todos los datos de una orden en la base de datos de Mostro.
+# order.sh — Consulta todos los datos de una orden en la base de datos de Mostro.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/mostro-env.sh"
+source "$SCRIPT_DIR/../admin/env.sh"
 
 # --- Uso ---
 if [[ -z "$1" ]]; then

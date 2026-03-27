@@ -1,10 +1,10 @@
 #!/bin/bash
 # ============================================================================
-# monitor_tx.sh — Monitoriza una transacción Bitcoin y notifica por Telegram
-# Uso: ./monitor_tx.sh <txid>
+# monitor.sh — Monitoriza una transacción Bitcoin y notifica por Telegram
+# Uso: ./monitor.sh <txid>
 # ============================================================================
 
-source "$(dirname "${BASH_SOURCE[0]}")/mostro-env.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../admin/env.sh"
 
 TELEGRAM_BOT_TOKEN="${TELEGRAM_TOKEN:-}"
 CHECK_INTERVAL=${CHECK_INTERVAL:-60}

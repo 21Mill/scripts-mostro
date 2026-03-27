@@ -3,7 +3,7 @@
 # mostro-status.sh — Estado de todos los componentes Mostro
 # ============================================================================
 
-source "$(dirname "${BASH_SOURCE[0]}")/mostro-env.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 
 echo -e "${BOLD}${CYAN}"
 echo "🧌 Mostro Status"
@@ -85,4 +85,4 @@ fi
 
 echo ""
 echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "Actualizar: ${BOLD}./mostro-update.sh${NC} | Rollback: ${BOLD}./mostro-rollback.sh${NC}"
+echo -e "Actualizar: ${BOLD}./update.sh${NC} | Rollback: ${BOLD}./rollback.sh${NC}"

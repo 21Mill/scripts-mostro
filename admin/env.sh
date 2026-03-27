@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# mostro-env.sh — Carga configuración común para los scripts de Mostro
+# env.sh — Carga configuración común para los scripts de Mostro
 # ============================================================================
 
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}")" && pwd)"
