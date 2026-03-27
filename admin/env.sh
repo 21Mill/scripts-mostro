@@ -3,11 +3,14 @@
 # env.sh — Carga configuración común para los scripts de Mostro
 # ============================================================================
 
+# Directorio del script que llama (para _OWNER_HOME)
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}")" && pwd)"
+# Raíz del repo: admin/ está un nivel dentro de scripts/
+_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-if [ -f "$_SCRIPT_DIR/.env" ]; then
+if [ -f "$_REPO_ROOT/.env" ]; then
     set -a
-    source "$_SCRIPT_DIR/.env"
+    source "$_REPO_ROOT/.env"
     set +a
 fi
 
