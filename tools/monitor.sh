@@ -7,6 +7,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/../admin/env.sh"
 
 TELEGRAM_BOT_TOKEN="${TELEGRAM_TOKEN:-}"
+CHAT_ID="${TELEGRAM_MONITOR_CHAT_ID:-$TELEGRAM_CHAT_ID}"
 CHECK_INTERVAL=${CHECK_INTERVAL:-60}
 
 if [ -z "$1" ]; then
@@ -20,14 +21,25 @@ if ! command -v curl &> /dev/null || ! command -v jq &> /dev/null; then
 fi
 
 TXID=$1
+
+# Auto-lanzarse en background si no lo está ya
+if [ -z "$MONITOR_BG" ]; then
+    LOG="$HOME/monitor-${TXID:0:8}.log"
+    export MONITOR_BG=1
+    nohup "$0" "$TXID" >> "$LOG" 2>&1 &
+    echo "Lanzado en background (PID: $!)"
+    echo "Log: $LOG"
+    exit 0
+fi
+
 API_URL="https://mempool.space/api/tx/$TXID"
 FALLBACK_URL="https://blockstream.info/api/tx/$TXID"
 
 send_telegram() {
     local MESSAGE="$1"
-    if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+    if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$CHAT_ID" ]; then
         curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            -d "chat_id=${CHAT_ID}" \
             -d "text=${MESSAGE}" \
             -d "parse_mode=HTML" > /dev/null
     fi
