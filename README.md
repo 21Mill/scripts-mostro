@@ -7,7 +7,7 @@ Scripts de gestión, monitorización y automatización para un nodo [Mostro](htt
 ```bash
 git clone git@github.com:21Mill/scripts-mostro.git
 cd scripts-mostro
-./setup.sh
+./admin/setup.sh
 ```
 
 El asistente interactivo te guiará para configurar todas las rutas y credenciales. Genera un archivo `.env` que todos los scripts leen automáticamente.
@@ -54,114 +54,136 @@ Los valores comentados en `.env.example` muestran los defaults. Solo necesitas d
 
 ## Scripts
 
-### setup.sh
+### admin/setup.sh
 
 Asistente interactivo de configuración. Pregunta las rutas, valida que existen, permite probar Telegram y genera el `.env`.
 
 ```bash
-./setup.sh
+./admin/setup.sh
 ```
 
-### mostro-update.sh
+### admin/update.sh
 
 Actualización segura de componentes Mostro (mostrod, mostrix, mostro-watchdog). Compara versiones locales vs remotas, muestra commits pendientes, hace backup antes de actualizar y recompila desde fuentes.
 
 ```bash
-./mostro-update.sh              # Comprobar y actualizar todos
-./mostro-update.sh mostrod      # Solo mostrod
-./mostro-update.sh --check      # Solo comprobar, sin actualizar
+./admin/update.sh              # Comprobar y actualizar todos
+./admin/update.sh mostrod      # Solo mostrod
+./admin/update.sh --check      # Solo comprobar, sin actualizar
 ```
 
-![mostro-update.sh](images/mostro-update.png)
+![admin/update.sh](images/mostro-update.png)
 
-### mostro-rollback.sh
+### admin/rollback.sh
 
-Restaura una versión anterior de cualquier componente desde los backups creados por `mostro-update.sh`.
+Restaura una versión anterior de cualquier componente desde los backups creados por `update.sh`.
 
 ```bash
-./mostro-rollback.sh            # Lista backups disponibles
-./mostro-rollback.sh mostrod    # Restaurar mostrod del último backup
+./admin/rollback.sh            # Lista backups disponibles
+./admin/rollback.sh mostrod    # Restaurar mostrod del último backup
 ```
 
-### mostro-status.sh
+### admin/status.sh
 
 Muestra el estado completo del nodo: servicios activos, versiones instaladas vs disponibles, base de datos y backups.
 
 ```bash
-./mostro-status.sh
+./admin/status.sh
 ```
 
-![mostro-status.sh](images/mostro-status.png)
+![admin/status.sh](images/mostro-status.png)
 
-### mostro-order.sh
+### tools/order.sh
 
 Consulta todos los datos de una orden en la base de datos de Mostro. Soporta búsqueda por UUID completo o parcial, y modos especiales para listar órdenes recientes, pendientes, en curso o estadísticas generales.
 
 Muestra: tipo, estado, montos (incluyendo fiat final en órdenes con rango), comisiones (fee/routing/dev con totales), participantes (pubkeys), datos Lightning (hash/preimage/invoice), disputas, valoraciones, tiempos (con duración del trade) y trade index.
 
 ```bash
-./mostro-order.sh <order_id>       # Consultar una orden (UUID completo)
-./mostro-order.sh 7361b8fe         # Buscar por UUID parcial
-./mostro-order.sh --recent         # Últimas 10 órdenes
-./mostro-order.sh --pending        # Órdenes pendientes activas
-./mostro-order.sh --active         # Órdenes en curso (tomadas, no finalizadas)
-./mostro-order.sh --stats          # Estadísticas generales (todo el historial)
-./mostro-order.sh --stats 7d       # Estadísticas de la última semana
-./mostro-order.sh --stats 30d      # Estadísticas del último mes
-./mostro-order.sh --stats 2026-03-01..2026-03-23  # Entre dos fechas
+./tools/order.sh <order_id>       # Consultar una orden (UUID completo)
+./tools/order.sh 7361b8fe         # Buscar por UUID parcial
+./tools/order.sh --recent         # Últimas 10 órdenes
+./tools/order.sh --pending        # Órdenes pendientes activas
+./tools/order.sh --active         # Órdenes en curso (tomadas, no finalizadas)
+./tools/order.sh --stats          # Estadísticas generales (todo el historial)
+./tools/order.sh --stats 7d       # Estadísticas de la última semana
+./tools/order.sh --stats 30d      # Estadísticas del último mes
+./tools/order.sh --stats 2026-03-01..2026-03-23  # Entre dos fechas
 ```
 
 Periodos disponibles para `--stats`: `today`/`hoy`, `24h`, `7d`/`week`/`semana`, `30d`/`month`/`mes`, `90d`/`trimestre`, `year`/`año`, `YYYY-MM-DD` (desde fecha), `YYYY-MM-DD..YYYY-MM-DD` (rango).
 
-### mostro_bot.py
+### tools/report.sh
+
+Genera un informe financiero de la actividad del nodo: volumen de trading, flujo de sats, ingresos, disputas y tendencia diaria con gráfico ASCII.
+
+```bash
+./tools/report.sh              # Últimos 30 días (default)
+./tools/report.sh today        # Hoy
+./tools/report.sh week         # Últimos 7 días
+./tools/report.sh month        # Últimos 30 días
+./tools/report.sh year         # Último año
+./tools/report.sh all          # Todo el historial
+./tools/report.sh 2026-03-01 2026-03-31  # Rango de fechas
+```
+
+### tools/logs.sh
+
+Busca y formatea logs de Mostro por order ID. Usa `journalctl` por defecto o un archivo de log si `MOSTRO_LOG` está configurado.
+
+```bash
+./tools/logs.sh a179dca3
+```
+
+![tools/logs.sh](images/mostro_log_search.png)
+
+### tools/monitor.sh
+
+Monitoriza una transacción Bitcoin hasta su confirmación y notifica por Telegram.
+
+```bash
+./tools/monitor.sh <txid>
+```
+
+### bot/premiums.sh
+
+Genera `data/premiums.json` con los premiums anonimizados y lo sube a GitHub Pages. Se ejecuta automáticamente cada noche vía cron.
+
+```bash
+./bot/premiums.sh
+```
+
+### bot/bot.py
 
 Bot que escucha nuevas ofertas en el relay de Mostro y las publica en un canal de Telegram. Cuando una oferta es tomada, cancelada o expira, el mensaje se borra automáticamente del canal. Al arrancar, escanea todas las órdenes pendientes de las últimas 24h para publicar las que no hayan sido vistas.
 
 **Dependencias:** `pip install websocket-client requests python-dotenv`
 
 ```bash
-python3 mostro_bot.py
+python3 bot/bot.py
 ```
 
-### mostro_bot_nostr.py
+### bot/bot-nostr.py
 
 Bot que publica las ofertas como notas (kind 1) en Nostr desde un pubkey dedicado. Cuando una oferta deja de estar pendiente, envía un evento de borrado (NIP-09, kind 5). Si no existe un `NOSTR_BOT_NSEC` en el `.env`, genera las claves automáticamente. Al arrancar, escanea todas las órdenes pendientes para no perder ofertas creadas antes del inicio del bot.
 
 **Dependencias:** `pip install websocket-client pynostr python-dotenv`
 
 ```bash
-python3 mostro_bot_nostr.py
+python3 bot/bot-nostr.py
 ```
 
-### mostro_log_search.sh
-
-Busca y formatea logs de Mostro por order ID. Usa `journalctl` por defecto o un archivo de log si `MOSTRO_LOG` está configurado.
-
-```bash
-./mostro_log_search.sh a179dca3
-```
-
-![mostro_log_search.sh](images/mostro_log_search.png)
-
-### monitor_tx.sh
-
-Monitoriza una transacción Bitcoin hasta su confirmación y notifica por Telegram.
-
-```bash
-./monitor_tx.sh <txid>
-```
-
-### test_telegram.py
+### bot/test-telegram.py
 
 Script de prueba para verificar las credenciales de Telegram.
 
 ```bash
-python3 test_telegram.py
+python3 bot/test-telegram.py
 ```
 
 ## Arquitectura de los bots
 
-Los bots de Telegram y Nostr comparten un módulo común (`mostro_common.py`) que contiene:
+Los bots de Telegram y Nostr comparten un módulo común (`bot/common.py`) que contiene:
 
 - Conexión WebSocket al relay de Mostro con keepalive y reconexión automática
 - Parsing de eventos kind 38383 (ofertas)
@@ -172,8 +194,8 @@ Cada bot se ejecuta como un servicio systemd independiente:
 
 | Servicio | Bot | Plataforma |
 |----------|-----|------------|
-| `mostrobot.service` | `mostro_bot.py` | Telegram |
-| `mostrobot-nostr.service` | `mostro_bot_nostr.py` | Nostr |
+| `mostrobot.service` | `bot/bot.py` | Telegram |
+| `mostrobot-nostr.service` | `bot/bot-nostr.py` | Nostr |
 
 ## Estructura
 
@@ -182,16 +204,21 @@ Cada bot se ejecuta como un servicio systemd independiente:
 ├── .env.example            # Plantilla de configuración
 ├── .gitignore              # Excluye .env, logs, orders y cache
 ├── images/                 # Capturas de pantalla
-├── mostro-env.sh           # Configuración compartida (cargado por todos los .sh)
-├── mostro_common.py        # Módulo compartido por los bots Python
-├── setup.sh                # Asistente de configuración interactivo
-├── monitor_tx.sh           # Monitor de transacciones BTC
-├── mostro-order.sh         # Consulta de órdenes en base de datos
-├── mostro-rollback.sh      # Rollback de componentes
-├── mostro-status.sh        # Estado del nodo
-├── mostro-update.sh        # Actualización de componentes
-├── mostro_bot.py           # Bot de ofertas para Telegram
-├── mostro_bot_nostr.py     # Bot de ofertas para Nostr
-├── mostro_log_search.sh    # Búsqueda en logs
-└── test_telegram.py        # Test de Telegram
+├── admin/
+│   ├── env.sh              # Configuración compartida (cargado por todos los .sh)
+│   ├── setup.sh            # Asistente de configuración interactivo
+│   ├── status.sh           # Estado del nodo
+│   ├── update.sh           # Actualización de componentes
+│   └── rollback.sh         # Rollback de componentes
+├── tools/
+│   ├── order.sh            # Consulta de órdenes en base de datos
+│   ├── report.sh           # Informe financiero de actividad
+│   ├── logs.sh             # Búsqueda en logs
+│   └── monitor.sh          # Monitor de transacciones BTC
+└── bot/
+    ├── premiums.sh         # Generador de datos para GitHub Pages
+    ├── bot.py              # Bot de ofertas para Telegram
+    ├── bot-nostr.py        # Bot de ofertas para Nostr
+    ├── common.py           # Módulo compartido por los bots Python
+    └── test-telegram.py    # Test de Telegram
 ```
