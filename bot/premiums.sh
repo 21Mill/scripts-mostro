@@ -84,17 +84,24 @@ trades_24h="${trades_24h:-0}"
 trades_7d="${trades_7d:-0}"
 trades_30d="${trades_30d:-0}"
 
-# --- Query 4: Mediana del precio BTC/EUR de ayer ---
+# --- Query 4: Mediana del precio BTC/EUR del último día con trades ---
 last_price=$(run_sql "$DB_PATH" -separator '|' "
+    WITH last_day AS (
+      SELECT DATE(created_at, 'unixepoch') AS d
+      FROM orders
+      WHERE status = 'success' AND amount > 0 AND fiat_code = 'EUR'
+      ORDER BY created_at DESC
+      LIMIT 1
+    )
     SELECT CAST(ROUND(fiat_amount * 100000000.0 / amount) AS INTEGER)
     FROM orders
     WHERE status = 'success' AND amount > 0 AND fiat_code = 'EUR'
-      AND DATE(created_at, 'unixepoch') = DATE('now', '-1 day')
+      AND DATE(created_at, 'unixepoch') = (SELECT d FROM last_day)
     ORDER BY fiat_amount * 1.0 / amount
     LIMIT 1 OFFSET (
       SELECT COUNT(*) / 2 FROM orders
       WHERE status = 'success' AND amount > 0 AND fiat_code = 'EUR'
-        AND DATE(created_at, 'unixepoch') = DATE('now', '-1 day')
+        AND DATE(created_at, 'unixepoch') = (SELECT d FROM last_day)
     )
 ")
 last_price="${last_price:-null}"
