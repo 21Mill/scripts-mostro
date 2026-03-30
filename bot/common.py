@@ -114,7 +114,17 @@ def formato_texto(oferta, html=False):
         elif p < 0:
             premium_txt = f"📉 {b('Descuento:')}  {premium}%"
         else:
-            premium_txt = f"📊 {b('Premium:')}  Sin premium (precio de mercado)"
+            sats_fijos = oferta["monto_sats"]
+            fiat_fijo = oferta["monto_fiat"]
+            if sats_fijos != "0" and fiat_fijo not in ("Cualquier monto",) and "—" not in fiat_fijo:
+                try:
+                    precio_btc = (float(fiat_fijo) / int(sats_fijos)) * 100_000_000
+                    precio_fmt = f"{int(round(precio_btc)):,}".replace(",", ".")
+                    premium_txt = f"💲 {b('Precio BTC:')}  {precio_fmt} {oferta['fiat']}"
+                except (ValueError, ZeroDivisionError):
+                    premium_txt = f"📊 {b('Premium:')}  Precio de mercado"
+            else:
+                premium_txt = f"📊 {b('Premium:')}  Precio de mercado"
     except ValueError:
         premium_txt = f"📊 {b('Premium:')}  {premium}%"
 
