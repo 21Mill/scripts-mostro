@@ -55,7 +55,7 @@ run_in_dir() {
     local owner
     owner=$(stat -c '%U' "$dir" 2>/dev/null)
     if [ "$owner" != "$(whoami)" ]; then
-        sudo -u "$owner" bash -c "cd '$dir' && $*"
+        sudo -u "$owner" bash -c "export PATH=\"\$HOME/.cargo/bin:\$PATH\"; cd '$dir' && $*"
     else
         ( cd "$dir" && eval "$*" )
     fi
