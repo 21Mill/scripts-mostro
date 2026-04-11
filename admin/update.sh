@@ -147,6 +147,35 @@ backup_component() {
         sudo cp "$config" "$BACKUP_TS/$name/" 2>/dev/null && \
             log_info "Config respaldada: $BACKUP_TS/$name/$(basename "$config")"
     fi
+
+    # Backup de la BD (solo para mostrod, usando sqlite3 online backup API)
+    if [ "$name" = "mostrod" ]; then
+        local db_path="${MOSTRO_DB:-/opt/mostro/mostro.db}"
+        local real_db
+        real_db=$(readlink -f "$db_path" 2>/dev/null || echo "$db_path")
+        if sudo -u mostro test -f "$real_db" 2>/dev/null; then
+            sudo -u mostro sqlite3 "$real_db" ".backup '$BACKUP_TS/$name/mostro.db'" && \
+                log_info "BD respaldada: $BACKUP_TS/$name/mostro.db"
+        fi
+    fi
+}
+
+# --- Detección de migraciones ---
+
+check_migrations() {
+    local src_dir="$1"
+    local current_migrations new_migrations new_files
+
+    current_migrations=$(run_in_dir "$src_dir" "git show HEAD:migrations/ 2>/dev/null | grep -E '^[0-9]{14}_' | sort" 2>/dev/null || true)
+    new_migrations=$(run_in_dir "$src_dir" "git show origin/main:migrations/ 2>/dev/null | grep -E '^[0-9]{14}_' | sort" 2>/dev/null || true)
+
+    new_files=$(comm -13 <(echo "$current_migrations") <(echo "$new_migrations") 2>/dev/null || true)
+
+    if [ -n "$new_files" ]; then
+        echo "$new_files"
+        return 0
+    fi
+    return 1
 }
 
 # --- Verificación GPG + SHA256 (mostrod / mostrix) ---
@@ -267,19 +296,38 @@ install_binary() {
 restart_service() {
     local service="$1"
 
-    if sudo systemctl is-enabled "$service" &>/dev/null; then
-        log_info "Reiniciando $service..."
-        sudo systemctl restart "$service"
-        sleep 2
-        if sudo systemctl is-active "$service" &>/dev/null; then
-            log_ok "$service arrancado correctamente"
-        else
-            log_error "$service falló al arrancar"
-            sudo journalctl -u "$service" --no-pager -n 10
-            return 1
-        fi
-    else
+    if ! sudo systemctl is-enabled "$service" &>/dev/null; then
         log_warn "$service no está habilitado"
+        return 0
+    fi
+
+    log_info "Reiniciando $service..."
+    sudo systemctl restart "$service"
+
+    # Esperar hasta 30s a que aparezcan los indicadores de arranque correcto
+    local timeout=30 elapsed=0 ok=false
+    while [ $elapsed -lt $timeout ]; do
+        sleep 2
+        elapsed=$((elapsed + 2))
+        if sudo journalctl -u "$service" --since "1 minute ago" --no-pager -q 2>/dev/null \
+            | grep -qE "Connected to (LND|relay)|Settings correctly loaded"; then
+            ok=true
+            break
+        fi
+        # Si el servicio ha muerto, no seguir esperando
+        if ! sudo systemctl is-active "$service" &>/dev/null; then
+            break
+        fi
+    done
+
+    if $ok; then
+        log_ok "$service arrancado y conectado correctamente"
+    elif sudo systemctl is-active "$service" &>/dev/null; then
+        log_warn "$service activo pero sin confirmar conexión en ${timeout}s — revisa los logs"
+    else
+        log_error "$service falló al arrancar"
+        sudo journalctl -u "$service" --no-pager -n 15
+        return 1
     fi
 }
 
@@ -359,6 +407,16 @@ update_component() {
 
     backup_component "$name" "$bin_path" "$config_path"
 
+    # Detectar migraciones pendientes
+    local pending_migrations=""
+    if pending_migrations=$(check_migrations "$src_dir" 2>/dev/null); then
+        echo ""
+        log_warn "Esta actualización incluye migraciones de base de datos:"
+        echo "$pending_migrations" | sed 's/^/    /'
+        log_warn "Se aplicarán automáticamente al arrancar. Backup de BD ya realizado."
+        echo ""
+    fi
+
     # Determinar nombre del asset según arquitectura
     local arch triple bin_asset tmpdir
     arch=$(get_arch)
@@ -394,7 +452,22 @@ update_component() {
     new_ver=$("$bin_path" --version 2>/dev/null || get_local_version "$src_dir")
     log_ok "Nueva versión: $new_ver"
 
-    [ -n "$service" ] && restart_service "$service"
+    if [ -n "$service" ]; then
+        if ! restart_service "$service"; then
+            log_warn "Intentando rollback del binario..."
+            local backup_bin="$BACKUP_TS/$name/$(basename "$bin_path")"
+            if [ -f "$backup_bin" ]; then
+                sudo install "$backup_bin" "$bin_path"
+                log_info "Binario restaurado desde backup"
+                restart_service "$service" \
+                    && log_ok "Servicio restaurado a versión anterior" \
+                    || log_error "El rollback también falló — intervención manual necesaria"
+            else
+                log_error "No hay backup disponible para rollback"
+            fi
+            return 1
+        fi
+    fi
 
     if [ -n "$changed_config" ]; then
         echo ""
