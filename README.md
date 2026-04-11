@@ -64,15 +64,42 @@ Asistente interactivo de configuración. Pregunta las rutas, valida que existen,
 
 ### admin/update.sh
 
-Actualización segura de componentes Mostro (mostrod, mostrix, mostro-watchdog). Compara versiones locales vs remotas, muestra commits pendientes, hace backup antes de actualizar y recompila desde fuentes.
+Actualización segura de componentes Mostro (mostrod, mostrix, mostro-watchdog). Descarga binarios precompilados desde GitHub Releases y verifica su integridad con GPG (doble firma: negrunch + arkanoider) y SHA256 antes de instalar.
+
+Antes de cada actualización:
+- Hace backup del binario, la configuración **y la base de datos** (`mostro.db`)
+- Detecta si la nueva versión incluye migraciones de esquema SQLite y avisa
+- Muestra commits incluidos en la actualización y cambios en la plantilla de config
+
+Tras instalar:
+- Verifica que el servicio arranca correctamente esperando los mensajes de conexión a LND y relays (hasta 30s)
+- Si el servicio falla, hace **rollback automático** al binario anterior
 
 ```bash
 ./admin/update.sh              # Comprobar y actualizar todos
 ./admin/update.sh mostrod      # Solo mostrod
-./admin/update.sh --check      # Solo comprobar, sin actualizar
+./admin/update.sh mostrix      # Solo mostrix
+./admin/update.sh watchdog     # Solo mostro-watchdog
+./admin/update.sh --check      # Solo comprobar versiones, sin actualizar
 ```
 
 ![admin/update.sh](images/mostro-update.png)
+
+### admin/check_channels.sh
+
+Comprueba el número de canales LND inactivos y envía una alerta por Telegram (al mismo canal que el watchdog) si se supera el umbral. Usa el `bot_token` y `chat_id` del archivo de configuración del watchdog (`/opt/mostro/config.toml`), sin necesidad de configuración adicional.
+
+```bash
+./admin/check_channels.sh            # Comprueba y alerta si > 2 canales caídos
+./admin/check_channels.sh --status   # Muestra estado sin enviar alerta
+```
+
+La alerta incluye el número de canales caídos, el total de canales y la lista de canales inactivos con alias y capacidad.
+
+**Cron recomendado** (cada 10 minutos):
+```
+*/10 * * * * /home/admin/mostro-sources/scripts/admin/check_channels.sh >> /var/log/check_channels.log 2>&1
+```
 
 ### admin/rollback.sh
 
@@ -208,8 +235,9 @@ Cada bot se ejecuta como un servicio systemd independiente:
 │   ├── env.sh              # Configuración compartida (cargado por todos los .sh)
 │   ├── setup.sh            # Asistente de configuración interactivo
 │   ├── status.sh           # Estado del nodo
-│   ├── update.sh           # Actualización de componentes
-│   └── rollback.sh         # Rollback de componentes
+│   ├── update.sh           # Actualización de componentes (GPG+SHA256, backup BD, rollback)
+│   ├── rollback.sh         # Rollback de componentes
+│   └── check_channels.sh   # Alerta Telegram si >2 canales LND caídos
 ├── tools/
 │   ├── order.sh            # Consulta de órdenes en base de datos
 │   ├── report.sh           # Informe financiero de actividad
