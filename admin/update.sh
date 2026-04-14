@@ -153,8 +153,8 @@ backup_component() {
         local db_path="${MOSTRO_DB:-/opt/mostro/mostro.db}"
         local real_db
         real_db=$(readlink -f "$db_path" 2>/dev/null || echo "$db_path")
-        if sudo -u mostro test -f "$real_db" 2>/dev/null; then
-            sudo -u mostro sqlite3 "$real_db" ".backup '$BACKUP_TS/$name/mostro.db'" && \
+        if sudo test -f "$real_db" 2>/dev/null; then
+            sudo sqlite3 "$real_db" ".backup '$BACKUP_TS/$name/mostro.db'" && \
                 log_info "BD respaldada: $BACKUP_TS/$name/mostro.db"
         fi
     fi
@@ -446,11 +446,9 @@ update_component() {
     install_binary "$verified_bin" "$bin_path"
 
     # Actualizar repo fuente (para futuros git diff de config)
-    run_in_dir "$src_dir" "git pull --quiet" || true
+    run_in_dir "$src_dir" "git stash --quiet 2>/dev/null; git pull --quiet; git stash pop --quiet 2>/dev/null" || true
 
-    local new_ver
-    new_ver=$("$bin_path" --version 2>/dev/null || get_local_version "$src_dir")
-    log_ok "Nueva versión: $new_ver"
+    log_ok "Nueva versión: $remote_ver"
 
     if [ -n "$service" ]; then
         if ! restart_service "$service"; then
