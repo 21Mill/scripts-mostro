@@ -5,3 +5,4 @@ __pycache__/
 orders.json
 orders_nostr.json
 .env.bak
+accounting/accounting.db
