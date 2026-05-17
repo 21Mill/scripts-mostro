@@ -5,7 +5,7 @@ Sondea mostro.db cada 60s buscando órdenes completadas (status='success'),
 calcula el beneficio neto real usando LND para routing fees, guarda en
 accounting.db (SQLite) y notifica al operador por Telegram privado.
 
-Beneficio = fee - dev_fee - routing_buyer - routing_devs
+Beneficio = (fee × 2) - dev_fee - routing_buyer - routing_devs
 """
 
 import json
@@ -68,16 +68,17 @@ def get_processed_ids(con):
 
 def insert_earning(con, order_id, completed_at, amount, fiat_code, fiat_amount,
                    fee, dev_fee, routing_buyer, routing_devs):
+    real_fee = fee * 2  # Mostro registra solo el 50% de la fee real
     net = None
     if routing_buyer is not None and routing_devs is not None:
-        net = fee - dev_fee - routing_buyer - routing_devs
+        net = real_fee - dev_fee - routing_buyer - routing_devs
     con.execute("""
         INSERT OR IGNORE INTO earnings
           (order_id, completed_at, amount, fiat_code, fiat_amount,
            fee, dev_fee, routing_buyer, routing_devs, net_profit, notified_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (order_id, completed_at, amount, fiat_code, fiat_amount,
-          fee, dev_fee, routing_buyer, routing_devs, net, int(time.time())))
+          real_fee, dev_fee, routing_buyer, routing_devs, net, int(time.time())))
     con.commit()
     return net
 
@@ -253,7 +254,7 @@ def build_message(order, net_profit, routing_buyer, routing_devs, total_sats, to
         "💰 <b>Operación completada</b>",
         "",
         f"💵 <b>Volumen:</b>      {formato_sats(amount)} sats  •  {fiat_amount:,} {fiat}",
-        f"📊 <b>Fee cobrado:</b>  {formato_sats(fee)} sats",
+        f"📊 <b>Fee cobrado:</b>  {formato_sats(fee * 2)} sats",
         f"👨‍💻 <b>Dev fee:</b>     {formato_sats(dev_fee)} sats",
         routing_txt,
         "━━━━━━━━━━━━━━━━━━━━━",
