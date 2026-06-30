@@ -450,8 +450,8 @@ update_component() {
 
     install_binary "$verified_bin" "$bin_path"
 
-    # Actualizar repo fuente (para futuros git diff de config)
-    run_in_dir "$src_dir" "git stash --quiet 2>/dev/null; git pull --quiet; git stash pop --quiet 2>/dev/null" || true
+    # Actualizar refs del repo fuente (solo fetch, sin tocar el working tree)
+    run_in_dir "$src_dir" "git fetch origin --quiet 2>/dev/null" || true
 
     log_ok "Nueva versión: $remote_ver"
 
