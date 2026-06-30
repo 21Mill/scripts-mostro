@@ -214,19 +214,24 @@ download_and_verify_gpg() {
     curl -sL "$base_url/manifest.txt.sig.negrunch"   -o "$tmpdir/manifest.txt.sig.negrunch"
     curl -sL "$base_url/manifest.txt.sig.arkanoider" -o "$tmpdir/manifest.txt.sig.arkanoider"
 
-    log_info "Verificando firma GPG (negrunch)..."
-    if ! gpg --verify "$tmpdir/manifest.txt.sig.negrunch" "$tmpdir/manifest.txt" 2>/dev/null; then
-        log_error "Firma GPG de negrunch NO válida. Abortando."
+    log_info "Verificando firmas GPG (basta con una válida)..."
+    local sig_ok=false
+    if gpg --verify "$tmpdir/manifest.txt.sig.negrunch" "$tmpdir/manifest.txt" 2>/dev/null; then
+        log_ok "Firma negrunch válida"
+        sig_ok=true
+    else
+        log_warn "Firma negrunch no válida o ausente"
+    fi
+    if gpg --verify "$tmpdir/manifest.txt.sig.arkanoider" "$tmpdir/manifest.txt" 2>/dev/null; then
+        log_ok "Firma arkanoider válida"
+        sig_ok=true
+    else
+        log_warn "Firma arkanoider no válida o ausente"
+    fi
+    if ! $sig_ok; then
+        log_error "Ninguna firma GPG válida. Abortando."
         return 1
     fi
-    log_ok "Firma negrunch válida"
-
-    log_info "Verificando firma GPG (arkanoider)..."
-    if ! gpg --verify "$tmpdir/manifest.txt.sig.arkanoider" "$tmpdir/manifest.txt" 2>/dev/null; then
-        log_error "Firma GPG de arkanoider NO válida. Abortando."
-        return 1
-    fi
-    log_ok "Firma arkanoider válida"
 
     log_info "Verificando integridad SHA256..."
     local expected_hash
