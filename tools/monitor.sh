@@ -22,6 +22,32 @@ fi
 
 TXID=$1
 
+# Validación de formato: txid debe ser exactamente 64 caracteres hexadecimales
+if ! [[ "$TXID" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    echo "Error: '$TXID' no es una txid válida (debe ser 64 caracteres hexadecimales)."
+    exit 1
+fi
+
+# Validación de existencia: la tx debe ser visible en mempool o confirmada
+check_tx_exists() {
+    local RESPONSE
+    RESPONSE=$(curl -s --max-time 10 "https://mempool.space/api/tx/$TXID")
+    if echo "$RESPONSE" | jq -e '.txid' &>/dev/null; then
+        return 0
+    fi
+    RESPONSE=$(curl -s --max-time 10 "https://blockstream.info/api/tx/$TXID")
+    if echo "$RESPONSE" | jq -e '.txid' &>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+if ! check_tx_exists; then
+    echo "Error: La transacción '$TXID' no se encuentra en la mempool ni confirmada."
+    echo "Comprueba que la txid es correcta y que la transacción ha sido broadcast."
+    exit 1
+fi
+
 # Auto-lanzarse en background si no lo está ya
 if [ -z "$MONITOR_BG" ]; then
     LOG="$HOME/monitor-${TXID:0:8}.log"
@@ -81,6 +107,7 @@ while true; do
 
         echo "✅ ¡Confirmada en bloque $BLOCK_HEIGHT!"
         send_telegram "$MSG"
+        rm -f "$HOME/monitor-${TXID:0:8}.log"
         exit 0
     fi
 
