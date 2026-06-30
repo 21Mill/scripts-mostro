@@ -511,4 +511,14 @@ if $CHECK_ONLY; then
 else
     log_ok "Proceso completado"
     [ -d "$BACKUP_TS" ] && log_info "Backups guardados en: $BACKUP_TS"
+
+    # Retener solo los 3 backups más recientes
+    local_keep=3
+    mapfile -t old_backups < <(ls -1t "$BACKUP_DIR" 2>/dev/null | tail -n +"$((local_keep + 1))")
+    if [ ${#old_backups[@]} -gt 0 ]; then
+        for old in "${old_backups[@]}"; do
+            rm -rf "$BACKUP_DIR/$old"
+        done
+        log_info "Backups antiguos eliminados (se conservan los $local_keep más recientes)"
+    fi
 fi
