@@ -450,8 +450,9 @@ update_component() {
 
     install_binary "$verified_bin" "$bin_path"
 
-    # Actualizar refs del repo fuente (solo fetch, sin tocar el working tree)
-    run_in_dir "$src_dir" "git fetch origin --quiet 2>/dev/null" || true
+    # Actualizar Cargo.toml desde origin para que status.sh refleje la versión correcta
+    # (solo Cargo.toml; settings.toml y otros ficheros locales no se tocan)
+    run_in_dir "$src_dir" "git fetch origin --quiet 2>/dev/null && git checkout origin/main -- Cargo.toml 2>/dev/null" || true
 
     log_ok "Nueva versión: $remote_ver"
 
