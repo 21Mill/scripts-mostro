@@ -41,9 +41,15 @@ trades_json=$(sql_ro "$DB_PATH" -json "
 # --- Query 2: Premium medio diario (para el gráfico) ---
 # avg_btc_price se restringe a EUR: promediar precios de distintas divisas no significa
 # nada (un trade en CUP disparaba la media del día a millones).
+#
+# El día se agrupa en hora local ('localtime'), no en UTC. Agrupando en UTC, la barra
+# etiquetada "11/8" cubría en realidad de las 02:00 del 11 a las 02:00 del 12 hora
+# peninsular, así que las operaciones de después de medianoche se contaban en el día
+# anterior: siete trades del 11 de agosto, cinco de ellos al 6 %, caían en la barra del 10 y
+# dejaban la del 11 en un 0,2 % que no se parecía en nada al 1,3 % real del día.
 daily_json=$(sql_ro "$DB_PATH" -json "
     SELECT
-        DATE(created_at, 'unixepoch') as date,
+        DATE(created_at, 'unixepoch', 'localtime') as date,
         ROUND(AVG(premium), 1) as avg_premium,
         CAST(ROUND(AVG(CASE WHEN fiat_code = 'EUR'
                             THEN fiat_amount * 100000000.0 / amount END)) AS INTEGER) as avg_btc_price,
@@ -52,7 +58,7 @@ daily_json=$(sql_ro "$DB_PATH" -json "
     WHERE status = 'success'
       AND amount > 0
       AND created_at >= CAST(STRFTIME('%s', 'now', '-30 days') AS INTEGER)
-    GROUP BY DATE(created_at, 'unixepoch')
+    GROUP BY DATE(created_at, 'unixepoch', 'localtime')
     ORDER BY date
 ")
 [ -z "$daily_json" ] && daily_json="[]"
@@ -82,11 +88,13 @@ trades_7d="${trades_7d:-0}"
 trades_30d="${trades_30d:-0}"
 
 # --- Query 4: Mediana del precio BTC/EUR del último día con trades ---
+# El día, en hora local por el mismo motivo que la Query 2: "el último día con trades" se
+# decidía en UTC y podía dejar fuera las operaciones de después de medianoche.
 # Acotado a 30 días como el resto: sin esta ventana el precio se quedaba congelado y la web
 # mostraba como actual una cotización de semanas atrás durante las rachas sin trades.
 last_price=$(sql_ro "$DB_PATH" -separator '|' "
     WITH reciente AS (
-      SELECT DATE(created_at, 'unixepoch') AS d,
+      SELECT DATE(created_at, 'unixepoch', 'localtime') AS d,
              CAST(ROUND(fiat_amount * 100000000.0 / amount) AS INTEGER) AS precio,
              fiat_amount * 1.0 / amount AS ratio
       FROM orders
