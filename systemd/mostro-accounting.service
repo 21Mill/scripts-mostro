@@ -1,0 +1,16 @@
+[Unit]
+Description=NostroMostro Accounting Bot
+After=network.target mostro.service
+
+[Service]
+User=admin
+Group=admin
+WorkingDirectory=/home/admin/mostro-sources/scripts/accounting
+ExecStart=/usr/bin/python3 -u /home/admin/mostro-sources/scripts/accounting/accounting.py
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresca la instantánea de la base de Mostro
+
+[Timer]
+OnBootSec=2min
+# Cada minuto porque accounting.py sondea a ese ritmo buscando órdenes completadas.
+# El script no reescribe nada si la base no ha cambiado, así que el coste real es nulo.
+OnUnitActiveSec=60
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

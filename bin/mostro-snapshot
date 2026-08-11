@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# mostro-snapshot — Publica copias de solo lectura de las bases de Mostro.
+#
+# Existe para que las herramientas de informes (premiums.sh, report.sh, order.sh,
+# accounting.py) puedan leer los datos SIN privilegios. Antes lo hacían con
+#
+#     admin ALL=(mostro) NOPASSWD: /usr/bin/sqlite3
+#
+# que equivalía a una shell completa como mostro: sqlite3 ejecuta órdenes del sistema con
+# .shell, y ni siquiera -readonly lo impide, porque SELECT writefile('/ruta','x') escribe
+# ficheros desde SQL puro. Con la instantánea esa regla desaparece y no queda ninguna
+# frontera de privilegio que proteger.
+#
+# Lo ejecuta mostro-snapshot.timer como usuario mostro.
+
+set -euo pipefail
+
+DESTINO_DIR=/var/lib/mostro-snapshot
+
+# origen:nombre_destino
+BASES=(
+    "/data/mostro/mostro.db:mostro.db"
+    "/opt/mostro/disputes.db:disputes.db"
+)
+
+copiadas=0
+for entrada in "${BASES[@]}"; do
+    ORIGEN="${entrada%%:*}"
+    NOMBRE="${entrada##*:}"
+    DESTINO="$DESTINO_DIR/$NOMBRE"
+    TMP="$DESTINO.tmp"
+
+    [ -r "$ORIGEN" ] || { echo "aviso: no se puede leer $ORIGEN, se omite" >&2; continue; }
+
+    # Las bases están en modo WAL: las escrituras recientes viven en el fichero -wal y la
+    # fecha del principal no cambia. Hay que mirar el más reciente de los tres o la
+    # instantánea se quedaría congelada para siempre.
+    mas_reciente=0
+    for f in "$ORIGEN" "$ORIGEN-wal" "$ORIGEN-shm"; do
+        [ -e "$f" ] || continue
+        m=$(stat -c %Y "$f" 2>/dev/null || echo 0)
+        [ "$m" -gt "$mas_reciente" ] && mas_reciente=$m
+    done
+
+    if [ -f "$DESTINO" ]; then
+        m_dest=$(stat -c %Y "$DESTINO" 2>/dev/null || echo 0)
+        # Sin cambios: no reescribir. Evita ~1,5 GB diarios de escrituras inútiles en el SSD
+        # para unas bases que cambian unas pocas veces al día.
+        [ "$mas_reciente" -le "$m_dest" ] && continue
+    fi
+
+    # .backup usa la API de copia de SQLite: consistente aunque mostrod esté escribiendo, e
+    # incorpora el contenido del WAL. Copiar con cp daría una base corrupta.
+    sqlite3 "$ORIGEN" ".backup '$TMP'"
+
+    # La copia hereda el modo WAL del original, y una base en WAL NO se puede abrir en solo
+    # lectura sin permiso de escritura: SQLite necesita crear el fichero -shm y falla con
+    # "attempt to write a readonly database", que parece un problema de permisos y no lo es.
+    # Pasarla a DELETE la deja legible por cualquiera sin escribir nada.
+    sqlite3 "$TMP" "PRAGMA journal_mode=DELETE;" >/dev/null
+
+    chmod 640 "$TMP"
+    # Sustitución atómica: quien esté leyendo nunca ve un fichero a medias.
+    mv -f "$TMP" "$DESTINO"
+    copiadas=$((copiadas + 1))
+done
+
+[ "$copiadas" -gt 0 ] && echo "instantáneas actualizadas: $copiadas"
+exit 0

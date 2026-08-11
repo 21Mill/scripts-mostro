@@ -1,0 +1,23 @@
+[Unit]
+Description=NostroMostro Telegram Bot
+After=network.target
+
+[Service]
+# Usuario que ejecuta el script
+User=admin
+Group=admin
+
+# Dónde está el script y con qué programa se abre
+WorkingDirectory=/home/admin/mostro-sources/scripts/bot
+ExecStart=/usr/bin/python3 -u /home/admin/mostro-sources/scripts/bot/bot.py
+
+# Si el bot se cuelga por un fallo de internet, se reinicia solo a los 10 segundos
+Restart=always
+RestartSec=10
+
+# Para que los logs se guarden correctamente
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

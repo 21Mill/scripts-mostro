@@ -1,0 +1,14 @@
+[Unit]
+Description=Instantánea de solo lectura de la base de Mostro
+After=mostro.service
+
+[Service]
+Type=oneshot
+User=mostro
+Group=mostro
+ExecStart=/usr/local/bin/mostro-snapshot
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/mostro-snapshot
