@@ -5,6 +5,7 @@ Borra las notas cuando las ofertas son tomadas (NIP-09).
 
 import json
 import os
+import sys
 import time
 import websocket as ws_client
 from pathlib import Path
@@ -14,7 +15,8 @@ load_dotenv()
 
 from common import (
     MOSTRO_PUBKEY, RELAY,
-    parsear_oferta, formato_texto, cargar_ordenes, guardar_ordenes, conectar_relay
+    parsear_oferta, formato_texto, cargar_ordenes, guardar_ordenes, conectar_relay,
+    obtener_pending, reconciliar
 )
 
 # --- Configuración ---
@@ -98,44 +100,53 @@ def borrar_nota(event_id):
     publicar_evento(evento)
 
 
-def scan_inicial():
-    """Escanea el relay para publicar órdenes pending que el bot no haya visto."""
+def scan_inicial(solo_simular=False):
+    """Pone las notas al día con el relay: publica lo que falta y retira lo que sobra.
+
+    Retirar es la mitad que faltaba. El bot solo borraba una nota al ver en directo el
+    evento de cambio de estado, así que todo lo ocurrido mientras estaba parado no se
+    borraba nunca; y una oferta que caduca por NIP-40 no emite ningún evento, de modo que
+    en directo es indetectable por definición.
+    """
     global ordenes_publicadas
-    print("🔍 Escaneando órdenes pending existentes...")
-    try:
-        ws = ws_client.create_connection(RELAY, timeout=15)
-        ws.send(json.dumps(["REQ", "scan", {
-            "kinds": [38383],
-            "authors": [MOSTRO_PUBKEY],
-            "since": int(time.time()) - 86400
-        }]))
+    print("🔍 Reconciliando con el relay...")
 
-        pending = []
-        for _ in range(500):
-            resp = json.loads(ws.recv())
-            if resp[0] == "EVENT":
-                oferta = parsear_oferta(resp[2])
-                if oferta and oferta["estado"] == "pending":
-                    pending.append(oferta)
-            if resp[0] == "EOSE":
-                break
-        ws.close()
+    pending = obtener_pending()
+    a_retirar, a_publicar = reconciliar(ordenes_publicadas, pending)
 
-        nuevas = 0
-        for oferta in pending:
-            order_id = oferta["order_id"]
-            if order_id not in ordenes_publicadas:
-                texto = formato_texto(oferta, html=False)
-                event_id = publicar_nota(texto)
-                if event_id:
-                    ordenes_publicadas[order_id] = event_id
-                    guardar_ordenes(ORDERS_FILE, ordenes_publicadas)
-                    nuevas += 1
-                    time.sleep(1)
+    if pending is None:
+        print("⚠️ El relay no ha contestado: no se reconcilia (no se borra nada por si acaso)")
+        return
 
-        print(f"✅ Scan completado: {len(pending)} pending, {nuevas} nuevas publicadas")
-    except Exception as e:
-        print(f"⚠️ Error en scan inicial: {e}")
+    if solo_simular:
+        print(f"[simulación] retiraría {len(a_retirar)} y publicaría {len(a_publicar)}")
+        for order_id in a_retirar:
+            print(f"  - retirar {order_id} (nota: {ordenes_publicadas[order_id][:12]}...)")
+        for order_id in a_publicar:
+            print(f"  + publicar {order_id}")
+        return
+
+    retiradas = 0
+    for order_id in a_retirar:
+        # El borrado en Nostr es una petición, no una garantía: cada relay decide si la
+        # respeta. Reintentarla en cada arranque no cambiaría nada, así que la entrada se
+        # descarta tras pedirlo una vez.
+        borrar_nota(ordenes_publicadas[order_id])
+        del ordenes_publicadas[order_id]
+        guardar_ordenes(ORDERS_FILE, ordenes_publicadas)
+        retiradas += 1
+        time.sleep(0.5)
+
+    nuevas = 0
+    for order_id in a_publicar:
+        event_id = publicar_nota(formato_texto(pending[order_id], html=False))
+        if event_id:
+            ordenes_publicadas[order_id] = event_id
+            guardar_ordenes(ORDERS_FILE, ordenes_publicadas)
+            nuevas += 1
+            time.sleep(1)
+
+    print(f"✅ Reconciliado: {len(pending)} pending, {nuevas} publicadas, {retiradas} retiradas")
 
 
 def procesar_mensaje(ws, mensaje):
@@ -175,9 +186,12 @@ def procesar_mensaje(ws, mensaje):
 
 
 if __name__ == "__main__":
+    # --dry-run enseña qué retiraría y qué publicaría, sin tocar los relays ni el fichero.
+    simular = "--dry-run" in sys.argv
     print("🧌 Mostro Bot Nostr iniciado")
     print(f"🔑 npub: {private_key.public_key.bech32()}")
     print(f"📡 Relays: {', '.join(relay_list)}")
     print(f"📋 Ofertas cargadas: {len(ordenes_publicadas)}")
-    scan_inicial()
-    conectar_relay(procesar_mensaje)
+    scan_inicial(solo_simular=simular)
+    if not simular:
+        conectar_relay(procesar_mensaje)

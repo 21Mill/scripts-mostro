@@ -179,6 +179,61 @@ def formato_texto(oferta, html=False):
     return "\n".join(lineas)
 
 
+def obtener_pending(timeout=15, max_eventos=2000):
+    """Ofertas pending según el relay: {order_id: oferta}, o None si no contestó.
+
+    Sin filtro 'since' a propósito. Los kind 38383 son eventos reemplazables
+    parametrizados: el relay solo conserva el último por (autor, kind, d), así que una
+    consulta sin ventana temporal da el estado actual y nada más. Con la ventana de 24 h
+    que se usaba antes, una oferta viva más antigua parecía no existir.
+
+    Devolver None cuando no llega el EOSE es deliberado: quien reconcilia tiene que poder
+    distinguir "el relay dice que no queda ninguna" de "el relay no ha contestado".
+    Confundirlos vaciaría el canal entero durante una caída del relay.
+    """
+    ws = None
+    try:
+        ws = websocket.create_connection(RELAY, timeout=timeout)
+        ws.send(json.dumps(["REQ", "scan", {"kinds": [38383], "authors": [MOSTRO_PUBKEY]}]))
+
+        pending = {}
+        for _ in range(max_eventos):
+            respuesta = json.loads(ws.recv())
+            if respuesta[0] == "EVENT":
+                oferta = parsear_oferta(respuesta[2])
+                if oferta and oferta["estado"] == "pending":
+                    pending[oferta["order_id"]] = oferta
+            elif respuesta[0] == "EOSE":
+                return pending
+        print("⚠️ Demasiados eventos sin EOSE: no me fío del resultado")
+        return None
+    except Exception as e:
+        print(f"⚠️ No se pudo consultar el relay: {e}")
+        return None
+    finally:
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+
+def reconciliar(publicadas, pending):
+    """Compara lo publicado con la realidad del relay: (a_retirar, a_publicar).
+
+    Es el arreglo de una fuga real: los bots solo retiraban una oferta al ver en directo su
+    evento de cambio de estado, así que todo lo ocurrido mientras estaban parados se perdía
+    para siempre. Y la expiración NIP-40 es silenciosa —el evento simplemente desaparece,
+    sin avisar—, de modo que comparar contra el estado actual es la única forma de
+    detectarla.
+    """
+    if pending is None:
+        return [], []
+    a_retirar = [oid for oid in publicadas if oid not in pending]
+    a_publicar = [oid for oid in pending if oid not in publicadas]
+    return a_retirar, a_publicar
+
+
 def conectar_relay(on_message, on_open_extra=None):
     """Conecta al relay de Mostro y escucha eventos con keepalive."""
 
