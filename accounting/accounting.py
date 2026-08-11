@@ -12,18 +12,21 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 import time
 from pathlib import Path
 
-from dotenv import load_dotenv
-import requests
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.entorno import cargar_env
+from lib.formato import formato_sats
+from lib.telegram import enviar
 
 # ---------------------------------------------------------------------------
 # Configuración
 # ---------------------------------------------------------------------------
 
-ENV_FILE = Path(__file__).parent.parent / ".env"
-load_dotenv(ENV_FILE)
+cargar_env()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_MONITOR_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_MONITOR_CHAT_ID")
@@ -199,34 +202,11 @@ def decode_invoice_hash(bolt11):
 # Telegram
 # ---------------------------------------------------------------------------
 
-def formato_sats(n):
-    try:
-        return f"{int(n):,}".replace(",", ".")
-    except (ValueError, TypeError):
-        return str(n)
-
-
 def send_telegram(msg):
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("⚠️  TELEGRAM_TOKEN o CHAT_ID no configurados")
         return False
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": msg,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    for _ in range(2):
-        try:
-            r = requests.post(url, data=payload, timeout=10)
-            if r.status_code == 200:
-                return True
-            print(f"⚠️  Telegram {r.status_code}: {r.text[:100]}")
-        except requests.RequestException as e:
-            print(f"⚠️  Telegram error: {e}")
-        time.sleep(2)
-    return False
+    return enviar(TELEGRAM_TOKEN, CHAT_ID, msg, timeout=10, reintentos=1) is not None
 
 
 def build_message(order, net_profit, routing_buyer, routing_devs, total_sats, total_trades):

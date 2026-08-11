@@ -18,17 +18,20 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import requests
-from dotenv import load_dotenv
-
 SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR.parent))
+
+from lib.entorno import cargar_env
+from lib.estado import cargar_estado, guardar_estado
+from lib.formato import con_signo, formato_euros, formato_sats
+from lib.telegram import enviar
+
 ACCOUNTING_DB = SCRIPT_DIR / "accounting.db"
 ESTADO_FILE = SCRIPT_DIR / "informe-mensual-enviado.json"
 
 # Ruta absoluta a propósito: cron ejecuta desde $HOME, no desde aquí, y un load_dotenv()
 # relativo no encontraría el fichero ni daría error al no encontrarlo.
-ENV_FILE = SCRIPT_DIR.parent / ".env"
-load_dotenv(ENV_FILE)
+cargar_env()
 
 WEB_REPO = Path(
     os.getenv("NOSTROMOSTRO_WEB_REPO", str(Path.home() / "nostromostro.github.io"))
@@ -47,31 +50,6 @@ MESES = [
     "enero", "febrero", "marzo", "abril", "mayo", "junio",
     "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
 ]
-
-
-# --- Formateo ---------------------------------------------------------------
-
-
-def formato_sats(n):
-    """12345 -> '12.345'. Igual que en accounting.py y common.py."""
-    try:
-        return f"{int(n):,}".replace(",", ".")
-    except (ValueError, TypeError):
-        return str(n)
-
-
-def formato_euros(valor):
-    """5.938 -> '5,94'. Separador decimal español."""
-    return f"{valor:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
-
-
-def con_signo(n):
-    """Signo explícito, con el menos tipográfico que ya usa el desglose."""
-    if n > 0:
-        return f"+{formato_sats(n)}"
-    if n < 0:
-        return f"−{formato_sats(abs(n))}"
-    return "0"
 
 
 # --- Datos ------------------------------------------------------------------
@@ -187,40 +165,10 @@ def construir_mensaje(anio, mes, datos, previo, precio):
 
 
 def enviar_telegram(mensaje):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    datos = {
-        "chat_id": CHAT_ID,
-        "text": mensaje,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    try:
-        respuesta = requests.post(url, data=datos, timeout=30)
-        if respuesta.status_code == 200:
-            print("✅ Informe mensual enviado")
-            return True
-        print(f"❌ Error de Telegram: {respuesta.text}")
-    except requests.RequestException as e:
-        print(f"❌ Error de conexión con Telegram: {e}")
-    return False
-
-
-def cargar_estado():
-    try:
-        if ESTADO_FILE.exists():
-            with open(ESTADO_FILE) as f:
-                return json.load(f)
-    except (IOError, json.JSONDecodeError):
-        pass
-    return {}
-
-
-def guardar_estado(estado):
-    try:
-        with open(ESTADO_FILE, "w") as f:
-            json.dump(estado, f)
-    except IOError as e:
-        print(f"⚠️ Error guardando {ESTADO_FILE}: {e}")
+    if enviar(TOKEN, CHAT_ID, mensaje) is None:
+        return False
+    print("✅ Informe mensual enviado")
+    return True
 
 
 # --- Principal --------------------------------------------------------------
@@ -250,7 +198,7 @@ def main():
         print(f"❌ No se encuentra {ACCOUNTING_DB}")
         return 1
 
-    estado = cargar_estado()
+    estado = cargar_estado(ESTADO_FILE)
     if not args.force and not args.dry_run and estado.get("ultimo_envio") == clave:
         print(f"El informe de {clave} ya se envió, no se repite")
         return 0
@@ -287,7 +235,7 @@ def main():
         return 1
 
     # Una sola clave que se sobreescribe: el fichero no crece.
-    guardar_estado({"ultimo_envio": clave})
+    guardar_estado(ESTADO_FILE, {"ultimo_envio": clave})
     return 0
 
 

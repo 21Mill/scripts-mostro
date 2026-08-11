@@ -11,22 +11,23 @@ Lo invoca premiums.sh al final del cron diario de las 00:00.
 import argparse
 import json
 import os
-import re
 import sys
 from datetime import datetime
 from pathlib import Path
 
-import requests
-from dotenv import load_dotenv
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from common import ENV_FILE, cargar_ordenes, guardar_ordenes, formato_sats
+from lib.entorno import cargar_env
+from lib.estado import cargar_estado, guardar_estado
+from lib.formato import formato_sats
+from lib.telegram import credenciales_de_toml, enviar
 
 SCRIPT_DIR = Path(__file__).parent
 ESTADO_FILE = SCRIPT_DIR / "resumen-enviado.json"
 
 # Por ruta absoluta a propósito: premiums.sh hace 'cd' al repo web antes de invocarnos, así
 # que un load_dotenv() sin argumentos buscaría el .env desde el directorio equivocado.
-load_dotenv(ENV_FILE)
+cargar_env()
 
 WEB_REPO = Path(
     os.getenv("NOSTROMOSTRO_WEB_REPO", str(Path.home() / "nostromostro.github.io"))
@@ -38,28 +39,6 @@ URL_MERCADO = "https://nostromostro.github.io/#mercado"
 # Con menos trades que esto, el ranking describiría las operaciones una por una en vez de
 # agregarlas. Por debajo del umbral la línea se omite.
 MIN_TRADES_METODOS = 5
-
-def credenciales_de_toml(ruta):
-    """Lee bot_token y chat_id de la sección [telegram] de un config.toml.
-
-    Permite reutilizar el bot que ya tenga configurado otro servicio (el watchdog de
-    Mostro, @nostromostrobot) sin duplicar el token en un segundo fichero: al rotarlo solo
-    hay que tocar su config original. No usamos tomllib porque Ubuntu 22.04 trae Python
-    3.10 y llegó en la 3.11.
-    """
-    try:
-        texto = Path(ruta).read_text()
-    except (IOError, OSError) as e:
-        print(f"⚠️ No se pudo leer {ruta}: {e}")
-        return None, None
-    if "[telegram]" not in texto:
-        print(f"⚠️ {ruta} no tiene sección [telegram]")
-        return None, None
-    seccion = texto.split("[telegram]", 1)[1].split("\n[", 1)[0]
-    token = re.search(r'^\s*bot_token\s*=\s*"([^"]+)"', seccion, re.M)
-    chat = re.search(r'^\s*chat_id\s*=\s*"?(-?\d+|@[\w]+)"?', seccion, re.M)
-    return (token.group(1) if token else None), (chat.group(1) if chat else None)
-
 
 # Origen de las credenciales. Con TELEGRAM_STATS_CONFIG apuntando al config.toml de otro
 # servicio, se reutiliza su bot y su chat. Sin ella, valen las variables del .env.
@@ -156,22 +135,10 @@ def construir_mensaje(datos):
 
 
 def enviar_telegram(mensaje):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    datos = {
-        "chat_id": CHAT_ID,
-        "text": mensaje,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    try:
-        respuesta = requests.post(url, data=datos, timeout=30)
-        if respuesta.status_code == 200:
-            print("✅ Resumen publicado en Telegram")
-            return True
-        print(f"❌ Error de Telegram: {respuesta.text}")
-    except requests.RequestException as e:
-        print(f"❌ Error de conexión con Telegram: {e}")
-    return False
+    if enviar(TOKEN, CHAT_ID, mensaje) is None:
+        return False
+    print("✅ Resumen publicado en Telegram")
+    return True
 
 
 # --- Principal --------------------------------------------------------------
@@ -203,7 +170,7 @@ def main():
         return 0
 
     hoy = datetime.now().strftime("%Y-%m-%d")
-    estado = cargar_ordenes(ESTADO_FILE)
+    estado = cargar_estado(ESTADO_FILE)
     if not args.force and estado.get("ultimo_envio") == hoy:
         print(f"El resumen de {hoy} ya se envió, no se repite")
         return 0
@@ -227,7 +194,7 @@ def main():
         return 1
 
     # Una sola clave que se sobreescribe: el fichero no crece.
-    guardar_ordenes(ESTADO_FILE, {"ultimo_envio": hoy})
+    guardar_estado(ESTADO_FILE, {"ultimo_envio": hoy})
     return 0
 
 

@@ -9,18 +9,20 @@ import sys
 import time
 import websocket as ws_client
 from pathlib import Path
-from dotenv import load_dotenv
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from common import (
-    ENV_FILE, MOSTRO_PUBKEY, RELAY,
-    parsear_oferta, formato_texto, cargar_ordenes, guardar_ordenes, conectar_relay,
+    MOSTRO_PUBKEY, RELAY,
+    parsear_oferta, formato_texto, conectar_relay,
     obtener_pending, reconciliar
 )
+from lib.entorno import ENV_FILE, cargar_env
+from lib.estado import cargar_estado, guardar_estado
 
-# Por ruta absoluta: un load_dotenv() relativo no encontraría el .env al ejecutar esto
-# desde otro directorio, y este script en concreto reacciona a eso generando una identidad
-# Nostr nueva. Ver init_keys().
-load_dotenv(ENV_FILE)
+# El .env por ruta absoluta importa especialmente aquí: si no se encuentra, este script
+# reacciona generando una identidad Nostr nueva en cada arranque. Ver init_keys().
+cargar_env()
 
 # --- Configuración ---
 NOSTR_NSEC = os.getenv("NOSTR_BOT_NSEC", "")
@@ -53,7 +55,7 @@ def init_keys():
 
 
 private_key = init_keys()
-ordenes_publicadas = cargar_ordenes(ORDERS_FILE)
+ordenes_publicadas = cargar_estado(ORDERS_FILE)
 relay_list = [r.strip() for r in NOSTR_RELAYS.split(",") if r.strip()]
 
 
@@ -138,7 +140,7 @@ def scan_inicial(solo_simular=False):
         # descarta tras pedirlo una vez.
         borrar_nota(ordenes_publicadas[order_id])
         del ordenes_publicadas[order_id]
-        guardar_ordenes(ORDERS_FILE, ordenes_publicadas)
+        guardar_estado(ORDERS_FILE, ordenes_publicadas)
         retiradas += 1
         time.sleep(0.5)
 
@@ -147,7 +149,7 @@ def scan_inicial(solo_simular=False):
         event_id = publicar_nota(formato_texto(pending[order_id], html=False))
         if event_id:
             ordenes_publicadas[order_id] = event_id
-            guardar_ordenes(ORDERS_FILE, ordenes_publicadas)
+            guardar_estado(ORDERS_FILE, ordenes_publicadas)
             nuevas += 1
             time.sleep(1)
 
@@ -173,7 +175,7 @@ def procesar_mensaje(ws, mensaje):
             print(f"📡 Orden {order_id[:8]}... cambió a '{estado}'")
             borrar_nota(event_id)
             del ordenes_publicadas[order_id]
-            guardar_ordenes(ORDERS_FILE, ordenes_publicadas)
+            guardar_estado(ORDERS_FILE, ordenes_publicadas)
             return
 
         if estado != "pending" or order_id in ordenes_publicadas:
@@ -184,7 +186,7 @@ def procesar_mensaje(ws, mensaje):
 
         if event_id:
             ordenes_publicadas[order_id] = event_id
-            guardar_ordenes(ORDERS_FILE, ordenes_publicadas)
+            guardar_estado(ORDERS_FILE, ordenes_publicadas)
 
     except Exception as e:
         print(f"⚠️ Error procesando mensaje: {e}")

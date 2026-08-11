@@ -20,10 +20,12 @@ import sys
 from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
 
-SCRIPT_DIR = Path(__file__).parent
-load_dotenv(SCRIPT_DIR.parent / ".env")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.entorno import cargar_env
+
+cargar_env()
 
 TOKEN = os.getenv("TELEGRAM_STATS_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 

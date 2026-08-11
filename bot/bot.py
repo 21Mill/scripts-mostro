@@ -5,21 +5,22 @@ Borra los mensajes cuando las ofertas son tomadas.
 
 import json
 import os
-import time
-import requests
 import sys
+import time
 from pathlib import Path
-from dotenv import load_dotenv
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from common import (
-    ENV_FILE, MOSTRO_PUBKEY, RELAY,
-    parsear_oferta, formato_texto, cargar_ordenes, guardar_ordenes, conectar_relay,
+    MOSTRO_PUBKEY, RELAY,
+    parsear_oferta, formato_texto, conectar_relay,
     obtener_pending, reconciliar
 )
+from lib.entorno import cargar_env
+from lib.estado import cargar_estado, guardar_estado
+import lib.telegram as telegram
 
-# Por ruta absoluta: un load_dotenv() relativo no encontraría el .env al ejecutar esto
-# desde otro directorio y el bot arrancaría sin token, fallando en cada envío.
-load_dotenv(ENV_FILE)
+cargar_env()
 
 # --- Configuración ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -28,57 +29,20 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 SCRIPT_DIR = Path(__file__).parent
 ORDERS_FILE = SCRIPT_DIR / "orders.json"
 
-ordenes_publicadas = cargar_ordenes(ORDERS_FILE)
+ordenes_publicadas = cargar_estado(ORDERS_FILE)
 
 
 # --- Telegram ---
 
 def enviar_telegram(mensaje):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    datos = {
-        "chat_id": CHAT_ID,
-        "text": mensaje,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True
-    }
-    try:
-        respuesta = requests.post(url, data=datos)
-        if respuesta.status_code == 200:
-            result = respuesta.json()
-            message_id = result.get("result", {}).get("message_id")
-            print("✅ Oferta publicada en Telegram")
-            return message_id
-        else:
-            print(f"❌ Error de Telegram: {respuesta.text}")
-    except Exception as e:
-        print(f"❌ Error de conexión: {e}")
-    return None
+    message_id = telegram.enviar(TOKEN, CHAT_ID, mensaje)
+    if message_id:
+        print("✅ Oferta publicada en Telegram")
+    return message_id
 
 
 def borrar_telegram(message_id):
-    """True si la oferta puede darse por retirada; False si conviene reintentarlo.
-
-    Que Telegram responda con un error (mensaje inexistente, demasiado antiguo para
-    borrarlo) también cuenta como retirada: reintentarlo en cada arranque no lo va a
-    arreglar y la entrada se quedaría atascada para siempre. Solo un fallo de conexión
-    justifica conservarla.
-    """
-    url = f"https://api.telegram.org/bot{TOKEN}/deleteMessage"
-    datos = {
-        "chat_id": CHAT_ID,
-        "message_id": message_id
-    }
-    try:
-        respuesta = requests.post(url, data=datos, timeout=30)
-    except requests.RequestException as e:
-        print(f"❌ Error de conexión borrando mensaje {message_id}: {e}")
-        return False
-
-    if respuesta.status_code == 200:
-        print(f"🗑️ Oferta eliminada del canal (msg_id: {message_id})")
-    else:
-        print(f"⚠️ Telegram no pudo borrar {message_id}, se descarta igualmente: {respuesta.text}")
-    return True
+    return telegram.borrar(TOKEN, CHAT_ID, message_id)
 
 
 # --- Scan inicial ---
@@ -113,7 +77,7 @@ def scan_inicial(solo_simular=False):
     for order_id in a_retirar:
         if borrar_telegram(ordenes_publicadas[order_id]):
             del ordenes_publicadas[order_id]
-            guardar_ordenes(ORDERS_FILE, ordenes_publicadas)
+            guardar_estado(ORDERS_FILE, ordenes_publicadas)
             retiradas += 1
             time.sleep(0.5)
 
@@ -122,7 +86,7 @@ def scan_inicial(solo_simular=False):
         message_id = enviar_telegram(formato_texto(pending[order_id], html=True))
         if message_id:
             ordenes_publicadas[order_id] = message_id
-            guardar_ordenes(ORDERS_FILE, ordenes_publicadas)
+            guardar_estado(ORDERS_FILE, ordenes_publicadas)
             nuevas += 1
             time.sleep(1)
 
@@ -151,7 +115,7 @@ def procesar_mensaje(ws, mensaje):
             print(f"📡 Orden {order_id[:8]}... cambió a '{estado}'")
             borrar_telegram(message_id)
             del ordenes_publicadas[order_id]
-            guardar_ordenes(ORDERS_FILE, ordenes_publicadas)
+            guardar_estado(ORDERS_FILE, ordenes_publicadas)
             return
 
         # Nueva oferta pending: publicar
@@ -163,7 +127,7 @@ def procesar_mensaje(ws, mensaje):
 
         if message_id:
             ordenes_publicadas[order_id] = message_id
-            guardar_ordenes(ORDERS_FILE, ordenes_publicadas)
+            guardar_estado(ORDERS_FILE, ordenes_publicadas)
 
     except Exception as e:
         print(f"⚠️ Error procesando mensaje: {e}")

@@ -1,44 +1,28 @@
 """
-common.py — Módulo compartido por los bots de Mostro.
-Contiene la conexión al relay, parsing de ofertas y persistencia.
+common.py — Módulo del relay de Mostro, compartido por los bots.
+
+Solo lo específico de Nostr: conexión al relay, parseo de eventos kind 38383 y el texto de
+una oferta. El envío por Telegram, el formateo de cifras, la persistencia en JSON y la
+carga del .env viven en lib/, porque los usan también scripts que no tocan ningún relay.
 """
 
 import json
 import os
+import sys
 import time
-import threading
 import websocket
 from datetime import datetime, timezone
 from pathlib import Path
-from dotenv import load_dotenv
 
-# Ruta absoluta a propósito, y única para todos los scripts de bot/. Se ejecutan desde
-# directorios muy distintos (systemd, cron, a mano desde cualquier sitio) y un
-# load_dotenv() relativo simplemente no encuentra el fichero: la configuración se queda
-# vacía sin dar ningún error, que es la peor forma de fallar.
-ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(ENV_FILE)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.entorno import cargar_env
+from lib.formato import formato_sats
+
+cargar_env()
 
 MOSTRO_PUBKEY = os.getenv("MOSTRO_PUBKEY")
 RELAY = os.getenv("MOSTRO_RELAY")
-
-
-def cargar_ordenes(archivo):
-    try:
-        if Path(archivo).exists():
-            with open(archivo, "r") as f:
-                return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        pass
-    return {}
-
-
-def guardar_ordenes(archivo, ordenes):
-    try:
-        with open(archivo, "w") as f:
-            json.dump(ordenes, f)
-    except IOError as e:
-        print(f"⚠️ Error guardando {archivo}: {e}")
 
 
 def parsear_oferta(evento):
@@ -87,13 +71,6 @@ def parsear_oferta(evento):
         "monto_fiat": monto_fiat,
         "metodos": metodos_texto,
     }
-
-
-def formato_sats(sats_str):
-    try:
-        return f"{int(sats_str):,}".replace(",", ".")
-    except (ValueError, TypeError):
-        return sats_str
 
 
 def formato_texto(oferta, html=False):
