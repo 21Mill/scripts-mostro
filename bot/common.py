@@ -12,7 +12,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Ruta absoluta a propósito, y única para todos los scripts de bot/. Se ejecutan desde
+# directorios muy distintos (systemd, cron, a mano desde cualquier sitio) y un
+# load_dotenv() relativo simplemente no encuentra el fichero: la configuración se queda
+# vacía sin dar ningún error, que es la peor forma de fallar.
+ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(ENV_FILE)
 
 MOSTRO_PUBKEY = os.getenv("MOSTRO_PUBKEY")
 RELAY = os.getenv("MOSTRO_RELAY")

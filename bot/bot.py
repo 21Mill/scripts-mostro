@@ -11,13 +11,15 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
-
 from common import (
-    MOSTRO_PUBKEY, RELAY,
+    ENV_FILE, MOSTRO_PUBKEY, RELAY,
     parsear_oferta, formato_texto, cargar_ordenes, guardar_ordenes, conectar_relay,
     obtener_pending, reconciliar
 )
+
+# Por ruta absoluta: un load_dotenv() relativo no encontraría el .env al ejecutar esto
+# desde otro directorio y el bot arrancaría sin token, fallando en cada envío.
+load_dotenv(ENV_FILE)
 
 # --- Configuración ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")

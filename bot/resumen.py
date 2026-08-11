@@ -19,14 +19,14 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-from common import cargar_ordenes, guardar_ordenes, formato_sats
+from common import ENV_FILE, cargar_ordenes, guardar_ordenes, formato_sats
 
 SCRIPT_DIR = Path(__file__).parent
 ESTADO_FILE = SCRIPT_DIR / "resumen-enviado.json"
 
 # Por ruta absoluta a propósito: premiums.sh hace 'cd' al repo web antes de invocarnos, así
 # que un load_dotenv() sin argumentos buscaría el .env desde el directorio equivocado.
-load_dotenv(SCRIPT_DIR.parent / ".env")
+load_dotenv(ENV_FILE)
 
 WEB_REPO = Path(
     os.getenv("NOSTROMOSTRO_WEB_REPO", str(Path.home() / "nostromostro.github.io"))

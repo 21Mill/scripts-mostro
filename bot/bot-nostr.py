@@ -11,13 +11,16 @@ import websocket as ws_client
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
-
 from common import (
-    MOSTRO_PUBKEY, RELAY,
+    ENV_FILE, MOSTRO_PUBKEY, RELAY,
     parsear_oferta, formato_texto, cargar_ordenes, guardar_ordenes, conectar_relay,
     obtener_pending, reconciliar
 )
+
+# Por ruta absoluta: un load_dotenv() relativo no encontraría el .env al ejecutar esto
+# desde otro directorio, y este script en concreto reacciona a eso generando una identidad
+# Nostr nueva. Ver init_keys().
+load_dotenv(ENV_FILE)
 
 # --- Configuración ---
 NOSTR_NSEC = os.getenv("NOSTR_BOT_NSEC", "")
@@ -36,8 +39,10 @@ def init_keys():
         print("🔑 No se encontró NOSTR_BOT_NSEC, generando claves nuevas...")
         pk = PrivateKey()
         NOSTR_NSEC = pk.bech32()
-        env_file = SCRIPT_DIR / ".env"
-        with open(env_file, "a") as f:
+        # ENV_FILE, no SCRIPT_DIR/".env": esto escribía en bot/.env, un fichero que nadie
+        # lee, así que la clave generada se perdía y en el arranque siguiente se generaba
+        # otra distinta.
+        with open(ENV_FILE, "a") as f:
             f.write(f"\n# --- Nostr Bot (generado automáticamente) ---\n")
             f.write(f"NOSTR_BOT_NSEC={NOSTR_NSEC}\n")
         print(f"✅ Claves generadas y guardadas en .env")
