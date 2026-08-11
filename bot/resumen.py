@@ -38,7 +38,9 @@ URL_MERCADO = "https://nostromostro.github.io/#mercado"
 # agregarlas. Por debajo del umbral la línea se omite.
 MIN_TRADES_METODOS = 5
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+# El resumen puede ir por un bot distinto al de las ofertas. Si no se define uno propio,
+# reutiliza el existente.
+TOKEN = os.getenv("TELEGRAM_STATS_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 
 # Destino explícito y sin respaldo a propósito. TELEGRAM_TEST_CHAT_ID no es un chat de
 # pruebas: apunta al mismo canal público que TELEGRAM_CHAT_ID (@nostromostroofertas), así
