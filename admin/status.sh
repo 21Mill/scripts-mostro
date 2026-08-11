@@ -12,11 +12,15 @@ echo -e "${NC}"
 
 # --- Servicios ---
 echo -e "${BOLD}Servicios:${NC}"
-for svc in "$MOSTROD_SERVICE" "$WATCHDOG_SERVICE" "$BOT_SERVICE"; do
+for svc in "$MOSTROD_SERVICE" "$WATCHDOG_SERVICE" "$BOT_SERVICE" \
+           "$BOT_NOSTR_SERVICE" "$ACCOUNTING_SERVICE" "$SNAPSHOT_TIMER"; do
     [ -z "$svc" ] && continue
-    name=$(echo "$svc" | sed 's/.service//')
-    if sudo systemctl is-active "$svc" &>/dev/null; then
-        uptime=$(sudo systemctl show "$svc" --property=ActiveEnterTimestamp --value 2>/dev/null)
+    name=$(echo "$svc" | sed 's/\.service$//')
+    # Sin sudo: consultar el estado de una unidad no requiere privilegios. Cuando lo
+    # llevaba, un status.sh lanzado sin terminal (cron, ssh no interactivo) no podía pedir
+    # la contraseña y daba por inactivos todos los servicios, que estaban corriendo.
+    if systemctl is-active --quiet "$svc"; then
+        uptime=$(systemctl show "$svc" --property=ActiveEnterTimestamp --value 2>/dev/null)
         echo -e "  ${GREEN}●${NC} $name  ${GREEN}activo${NC}  (desde $uptime)"
     else
         echo -e "  ${RED}●${NC} $name  ${RED}inactivo${NC}"
@@ -37,7 +41,7 @@ declare -A SOURCES=(
 for comp in mostrod mostrix mostro-watchdog; do
     src="${SOURCES[$comp]}"
 
-    if ! sudo test -d "$src/.git" 2>/dev/null; then
+    if [ ! -d "$src/.git" ]; then
         echo -e "  ${BLUE}?${NC} $comp  ${YELLOW}(fuentes no encontradas: $src)${NC}"
         continue
     fi
@@ -63,15 +67,22 @@ echo ""
 
 # --- Base de datos ---
 echo -e "${BOLD}Base de datos:${NC}"
-if sudo test -f "$MOSTRO_DB" 2>/dev/null; then
-    size=$(sudo du -h "$MOSTRO_DB" 2>/dev/null | cut -f1)
-    mod=$(sudo stat -c %y "$MOSTRO_DB" 2>/dev/null | cut -d'.' -f1)
-    trades=$(sudo sqlite3 "$MOSTRO_DB" "SELECT COUNT(*) FROM orders WHERE status='success';" 2>/dev/null || echo "?")
-    pending=$(sudo sqlite3 "$MOSTRO_DB" "SELECT COUNT(*) FROM orders WHERE status='pending';" 2>/dev/null || echo "?")
-    echo -e "  Tamaño: $size | Modificado: $mod"
-    echo -e "  Trades completados: $trades | Pendientes: $pending"
+# Se informa sobre la instantánea, no sobre la base real: /data/mostro es 700 de mostro y
+# admin no puede ni hacerle stat. La instantánea se refresca cada minuto solo si la base ha
+# cambiado, así que su fecha es la del último cambio real; por eso se muestra su antigüedad,
+# que delata un mostro-snapshot.timer parado.
+if [ -f "$MOSTRO_DB_RO" ]; then
+    size=$(du -h "$MOSTRO_DB_RO" 2>/dev/null | cut -f1)
+    mod=$(stat -c %y "$MOSTRO_DB_RO" 2>/dev/null | cut -d'.' -f1)
+    edad=$(( ($(date +%s) - $(stat -c %Y "$MOSTRO_DB_RO")) / 60 ))
+    trades=$(sql_ro "$MOSTRO_DB_RO" "SELECT COUNT(*) FROM orders WHERE status='success';" || echo "?")
+    pending=$(sql_ro "$MOSTRO_DB_RO" "SELECT COUNT(*) FROM orders WHERE status='pending';" || echo "?")
+    echo -e "  Tamaño: ${size:-?} | Último cambio: ${mod:-?} (hace ${edad} min)"
+    echo -e "  Trades completados: ${trades:-?} | Pendientes: ${pending:-?}"
+    echo -e "  ${BLUE}Instantánea:${NC} $MOSTRO_DB_RO"
 else
-    echo -e "  ${YELLOW}No encontrada: $MOSTRO_DB${NC}"
+    echo -e "  ${YELLOW}No hay instantánea en $MOSTRO_DB_RO${NC}"
+    echo -e "  ${YELLOW}Comprueba mostro-snapshot.timer${NC}"
 fi
 
 echo ""
