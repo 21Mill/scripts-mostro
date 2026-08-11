@@ -11,6 +11,7 @@ Lo invoca premiums.sh al final del cron diario de las 00:00.
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -38,14 +39,40 @@ URL_MERCADO = "https://nostromostro.github.io/#mercado"
 # agregarlas. Por debajo del umbral la línea se omite.
 MIN_TRADES_METODOS = 5
 
-# El resumen puede ir por un bot distinto al de las ofertas. Si no se define uno propio,
-# reutiliza el existente.
-TOKEN = os.getenv("TELEGRAM_STATS_TOKEN") or os.getenv("TELEGRAM_TOKEN")
+def credenciales_de_toml(ruta):
+    """Lee bot_token y chat_id de la sección [telegram] de un config.toml.
 
-# Destino explícito y sin respaldo a propósito. TELEGRAM_TEST_CHAT_ID no es un chat de
-# pruebas: apunta al mismo canal público que TELEGRAM_CHAT_ID (@nostromostroofertas), así
-# que usarlo como respaldo publicaría en abierto por omisión. Sin esta variable no se envía.
-CHAT_ID = os.getenv("TELEGRAM_STATS_CHAT_ID")
+    Permite reutilizar el bot que ya tenga configurado otro servicio (el watchdog de
+    Mostro, @nostromostrobot) sin duplicar el token en un segundo fichero: al rotarlo solo
+    hay que tocar su config original. No usamos tomllib porque Ubuntu 22.04 trae Python
+    3.10 y llegó en la 3.11.
+    """
+    try:
+        texto = Path(ruta).read_text()
+    except (IOError, OSError) as e:
+        print(f"⚠️ No se pudo leer {ruta}: {e}")
+        return None, None
+    if "[telegram]" not in texto:
+        print(f"⚠️ {ruta} no tiene sección [telegram]")
+        return None, None
+    seccion = texto.split("[telegram]", 1)[1].split("\n[", 1)[0]
+    token = re.search(r'^\s*bot_token\s*=\s*"([^"]+)"', seccion, re.M)
+    chat = re.search(r'^\s*chat_id\s*=\s*"?(-?\d+|@[\w]+)"?', seccion, re.M)
+    return (token.group(1) if token else None), (chat.group(1) if chat else None)
+
+
+# Origen de las credenciales. Con TELEGRAM_STATS_CONFIG apuntando al config.toml de otro
+# servicio, se reutiliza su bot y su chat. Sin ella, valen las variables del .env.
+#
+# Nada de respaldos implícitos: TELEGRAM_TEST_CHAT_ID apunta al mismo canal público que
+# TELEGRAM_CHAT_ID (@nostromostroofertas), así que usarlo de reserva publicaría en abierto
+# por omisión. Si no hay destino, no se envía.
+_CONFIG_TOML = os.getenv("TELEGRAM_STATS_CONFIG")
+if _CONFIG_TOML:
+    TOKEN, CHAT_ID = credenciales_de_toml(_CONFIG_TOML)
+else:
+    TOKEN = os.getenv("TELEGRAM_STATS_TOKEN") or os.getenv("TELEGRAM_TOKEN")
+    CHAT_ID = os.getenv("TELEGRAM_STATS_CHAT_ID")
 
 SEPARADOR = "━━━━━━━━━━━━━━━━━━━━━"
 
