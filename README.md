@@ -38,19 +38,61 @@ Los valores comentados en `.env.example` muestran los defaults. Solo necesitas d
 | `WATCHDOG_CONFIG` | `$MOSTROD_SRC/config.toml` | Configuración del watchdog |
 | `WATCHDOG_BIN` | `/usr/local/bin/mostro-watchdog` | Binario del watchdog |
 | `WATCHDOG_SERVICE` | `mostro-watchdog.service` | Servicio systemd |
-| `BACKUP_DIR` | `~/mostro-sources/backups` | Directorio de backups |
-| `MOSTRO_DB` | `$MOSTROD_SRC/mostro.db` | Base de datos SQLite de órdenes |
-| `MOSTRO_DISPUTES_DB` | `/opt/mostro/disputes.db` | Base de datos SQLite de disputas |
-| `MOSTRO_USER` | `mostro` | Usuario del sistema que ejecuta mostrod |
-| `MOSTRO_LOG` | *(vacío = journalctl)* | Archivo de log |
 | `BOT_SERVICE` | `mostrobot.service` | Servicio del bot de Telegram |
-| `TELEGRAM_TOKEN` | — | Token del bot de Telegram |
-| `TELEGRAM_CHAT_ID` | — | Chat ID para ofertas |
-| `TELEGRAM_TEST_CHAT_ID` | — | Chat ID para pruebas |
+| `BOT_NOSTR_SERVICE` | `mostrobot-nostr.service` | Servicio del bot de Nostr |
+| `ACCOUNTING_SERVICE` | `mostro-accounting.service` | Servicio de contabilidad |
+| `SNAPSHOT_TIMER` | `mostro-snapshot.timer` | Timer de la instantánea |
+| `BACKUP_DIR` | `~/mostro-sources/backups` | Directorio de backups |
+| `MOSTRO_DB` | `$MOSTROD_SRC/mostro.db` | Base real. **Solo la usa `update.sh`** para el respaldo previo a una actualización |
+| `MOSTRO_DB_RO` | `/var/lib/mostro-snapshot/mostro.db` | Instantánea de solo lectura. De aquí leen todas las consultas |
+| `MOSTRO_DISPUTES_DB_RO` | `/var/lib/mostro-snapshot/disputes.db` | Instantánea de disputas |
+| `MOSTRO_LOG` | *(vacío = journalctl)* | Archivo de log |
+| `TELEGRAM_TOKEN` | — | Token del bot de ofertas |
+| `TELEGRAM_CHAT_ID` | — | Canal **público** donde se publican las ofertas |
+| `TELEGRAM_TEST_CHAT_ID` | — | Chat para `test-telegram.py` |
+| `TELEGRAM_MONITOR_TOKEN` | — | Bot para los avisos privados al operador |
+| `TELEGRAM_MONITOR_CHAT_ID` | — | Chat privado del operador (contabilidad, `monitor.sh`) |
+| `TELEGRAM_STATS_TOKEN` | *(cae a `TELEGRAM_TOKEN`)* | Bot para el resumen diario y el informe mensual |
+| `TELEGRAM_STATS_CHAT_ID` | — | Destino de los informes. **Sin respaldo: vacío = no se envía** |
+| `TELEGRAM_STATS_CONFIG` | — | `config.toml` del que tomar `bot_token` y `chat_id`; tiene prioridad |
 | `MOSTRO_PUBKEY` | — | Clave pública del nodo Mostro |
 | `MOSTRO_RELAY` | `wss://relay.mostro.network` | URL del relay Nostr |
 | `NOSTR_BOT_NSEC` | *(se genera automáticamente)* | Clave privada del bot de Nostr |
 | `NOSTR_BOT_RELAYS` | `wss://relay.damus.io,wss://nos.lol,wss://relay.mostro.network` | Relays donde publicar ofertas |
+| `NOSTROMOSTRO_WEB_REPO` | `~/nostromostro.github.io` | Repo de GitHub Pages para `premiums.json` |
+
+> **Cuidado con `TELEGRAM_STATS_CHAT_ID`.** Si está vacío, los informes no se envían y punto. No cae a `TELEGRAM_TEST_CHAT_ID`, que apunta al canal público de ofertas: hacerlo publicaría en abierto las cuentas de la instancia. Si no sabes qué id poner, usa `bot/resolver-chat-id.py`.
+
+## La instantánea de solo lectura
+
+Casi todo lo que hay aquí consulta `mostro.db`, una base que pertenece al usuario `mostro`
+y vive en un directorio que solo él puede abrir. La forma evidente de resolverlo era una
+regla de sudo:
+
+```
+admin ALL=(mostro) NOPASSWD: /usr/bin/sqlite3
+```
+
+Y es una puerta trasera. `sqlite3` interpreta meta-órdenes también cuando la consulta llega
+como argumento, así que `.shell id` da ejecución de código como `mostro` — el usuario que
+posee la nsec de la instancia. Ni siquiera `-readonly` lo evita: `-readonly` bloquea
+escrituras en la base, no en el sistema de ficheros, y `SELECT writefile('/ruta','x')`
+escribe desde SQL puro.
+
+En su lugar, `mostro-snapshot.timer` publica cada minuto una copia legible en
+`/var/lib/mostro-snapshot/`, y las herramientas leen de ahí sin privilegio ninguno. La regla
+de sudo ya no existe.
+
+Detalles que el script documenta y conviene no perder:
+
+- La copia se hace con `.backup`, la API de copia de SQLite, no con `cp`: las bases están en
+  modo WAL y una copia byte a byte saldría corrupta.
+- La copia se pasa a `journal_mode=DELETE`. Una base en WAL **no** se puede abrir en solo
+  lectura sin permiso de escritura, porque SQLite necesita crear su fichero `-shm`; el error
+  (`attempt to write a readonly database`) parece de permisos y no lo es.
+- Para saber si la base ha cambiado se mira la fecha de `.db`, `-wal` y `-shm`. En modo WAL
+  las escrituras recientes no tocan el fichero principal, así que mirar solo `.db` dejaría
+  la instantánea congelada.
 
 ## Scripts
 
@@ -96,11 +138,6 @@ Comprueba el número de canales LND inactivos y envía una alerta por Telegram (
 
 La alerta incluye el número de canales caídos, el total de canales y la lista de canales inactivos con alias y capacidad.
 
-**Cron recomendado** (cada 10 minutos):
-```
-*/10 * * * * /home/admin/mostro-sources/scripts/admin/check_channels.sh >> /var/log/check_channels.log 2>&1
-```
-
 ### admin/rollback.sh
 
 Restaura una versión anterior de cualquier componente desde los backups creados por `update.sh`.
@@ -112,7 +149,7 @@ Restaura una versión anterior de cualquier componente desde los backups creados
 
 ### admin/status.sh
 
-Muestra el estado completo del nodo: servicios activos, versiones instaladas vs disponibles, base de datos y backups.
+Muestra el estado completo del nodo: servicios activos, versiones instaladas vs disponibles, base de datos y backups. No necesita `sudo` para nada: los servicios se consultan directamente y los datos salen de la instantánea, cuya antigüedad se muestra para que un timer parado se note.
 
 ```bash
 ./admin/status.sh
@@ -166,87 +203,220 @@ Busca y formatea logs de Mostro por order ID. Usa `journalctl` por defecto o un 
 
 ### tools/monitor.sh
 
-Monitoriza una transacción Bitcoin hasta su confirmación y notifica por Telegram.
+Monitoriza una transacción Bitcoin hasta su confirmación y notifica por Telegram al chat privado del operador.
 
 ```bash
 ./tools/monitor.sh <txid>
 ```
 
+### accounting/accounting.py
+
+Servicio de contabilidad. Sondea la instantánea cada 60 s buscando órdenes que pasan a `success`, calcula el **beneficio neto real** y avisa por Telegram al chat privado, operación a operación.
+
+```
+neto = (fee × 2) − dev_fee − routing_comprador − routing_devs
+```
+
+El `× 2` no es un error: Mostro registra en la base solo el 50 % de la comisión real. Las
+comisiones de routing se sacan de LND (`lncli listpayments`), casando el
+`payment_hash` de la invoice del comprador y el del pago a los desarrolladores; se
+mantienen en una caché incremental para no releer todo el historial en cada ciclo.
+
+Guarda una fila por operación en `accounting/accounting.db`, que no se versiona.
+
+```bash
+python3 accounting/accounting.py     # normalmente vía mostro-accounting.service
+```
+
+### accounting/informe-mensual.py
+
+Informe financiero mensual al chat privado: ganancia neta con su equivalente en euros,
+número de operaciones, volumen, desglose (fee cobrado, dev fee y routing) y comparativa con
+el mes anterior. Agrega `accounting.db`, que ya tiene el neto calculado.
+
+Se envía también cuando el mes no ha tenido ninguna operación: el silencio no distingue
+«mes vacío» de «el cron ha fallado».
+
+```bash
+python3 accounting/informe-mensual.py                      # el mes anterior
+python3 accounting/informe-mensual.py --mes 2026-04        # un mes concreto
+python3 accounting/informe-mensual.py --mes 2026-04 --dry-run
+python3 accounting/informe-mensual.py --force              # aunque ya se enviara
+```
+
 ### bot/premiums.sh
 
-Genera `data/premiums.json` con los premiums anonimizados y lo sube a GitHub Pages. Se ejecuta automáticamente cada noche vía cron.
+Genera `data/premiums.json` con los premiums anonimizados, lo sube a GitHub Pages y llama a `resumen.py`. Se ejecuta cada noche vía cron.
 
 ```bash
 ./bot/premiums.sh
 ```
 
+### bot/resumen.py
+
+Resumen diario agregado en Telegram: trades y premium medio de las últimas 24 h y de los
+últimos 30 días, precio BTC/EUR y métodos de pago más usados.
+
+Se alimenta de `data/premiums.json` —el mismo fichero anonimizado que ya sirve la web— y no
+de la base de datos: así nada de lo que salga por aquí puede revelar algo que no esté ya
+publicado. Si no hubo trades en 24 h, no envía nada.
+
+```bash
+python3 bot/resumen.py --dry-run    # imprime el mensaje sin enviarlo
+python3 bot/resumen.py --force      # envía aunque ya se enviara hoy
+```
+
+### bot/resolver-chat-id.py
+
+Averigua a qué chats puede escribir el bot y muestra sus identificadores, para copiar el que
+corresponda a `TELEGRAM_STATS_CHAT_ID`. Escríbele algo al bot antes de ejecutarlo.
+
+```bash
+python3 bot/resolver-chat-id.py
+```
+
 ### bot/bot.py
 
-Bot que escucha nuevas ofertas en el relay de Mostro y las publica en un canal de Telegram. Cuando una oferta es tomada, cancelada o expira, el mensaje se borra automáticamente del canal. Al arrancar, escanea todas las órdenes pendientes de las últimas 24h para publicar las que no hayan sido vistas.
+Bot que escucha nuevas ofertas en el relay de Mostro y las publica en un canal de Telegram. Cuando una oferta es tomada, cancelada o expira, el mensaje se borra automáticamente del canal.
 
 **Dependencias:** `pip install websocket-client requests python-dotenv`
 
 ```bash
 python3 bot/bot.py
+python3 bot/bot.py --dry-run    # enseña qué publicaría y qué retiraría
 ```
 
 ### bot/bot-nostr.py
 
-Bot que publica las ofertas como notas (kind 1) en Nostr desde un pubkey dedicado. Cuando una oferta deja de estar pendiente, envía un evento de borrado (NIP-09, kind 5). Si no existe un `NOSTR_BOT_NSEC` en el `.env`, genera las claves automáticamente. Al arrancar, escanea todas las órdenes pendientes para no perder ofertas creadas antes del inicio del bot.
+Bot que publica las ofertas como notas (kind 1) en Nostr desde un pubkey dedicado. Cuando una oferta deja de estar pendiente, envía un evento de borrado (NIP-09, kind 5). Si no existe un `NOSTR_BOT_NSEC` en el `.env`, genera las claves automáticamente.
 
 **Dependencias:** `pip install websocket-client pynostr python-dotenv`
 
 ```bash
 python3 bot/bot-nostr.py
+python3 bot/bot-nostr.py --dry-run
 ```
 
 ### bot/test-telegram.py
 
-Script de prueba para verificar las credenciales de Telegram.
+Comprueba que las credenciales de Telegram funcionan, publicando en `TELEGRAM_TEST_CHAT_ID`.
 
 ```bash
 python3 bot/test-telegram.py
 ```
 
-## Arquitectura de los bots
+## Arquitectura
 
-Los bots de Telegram y Nostr comparten un módulo común (`bot/common.py`) que contiene:
+`lib/` contiene lo que comparten todos los scripts de Python, y **nada de Nostr**: así los
+scripts de contabilidad, que se ejecutan desde cron, no arrastran `websocket` ni `pynostr`
+solo para formatear un número.
 
-- Conexión WebSocket al relay de Mostro con keepalive y reconexión automática
-- Parsing de eventos kind 38383 (ofertas)
-- Formateo de texto (HTML para Telegram, plano para Nostr)
-- Persistencia de órdenes publicadas (JSON)
+| Módulo | Contiene |
+|--------|----------|
+| `lib/entorno.py` | Localiza y carga el `.env`, siempre por ruta absoluta |
+| `lib/formato.py` | Cifras con las convenciones españolas (`formato_sats`, `formato_euros`, `con_signo`) |
+| `lib/estado.py` | Persistencia en JSON del estado de cada script |
+| `lib/telegram.py` | Envío y borrado de mensajes, y lectura de credenciales de un `config.toml` |
 
-Cada bot se ejecuta como un servicio systemd independiente:
+`bot/common.py` es el módulo del relay: conexión con reconexión automática, parseo de
+eventos kind 38383 y el texto de una oferta (HTML para Telegram, plano para Nostr).
 
-| Servicio | Bot | Plataforma |
-|----------|-----|------------|
-| `mostrobot.service` | `bot/bot.py` | Telegram |
-| `mostrobot-nostr.service` | `bot/bot-nostr.py` | Nostr |
+La **reconciliación** (`obtener_pending` + `reconciliar`) merece una nota. Los bots retiraban
+una oferta solo al ver en directo su evento de cambio de estado, así que todo lo ocurrido
+mientras estaban parados no se retiraba nunca; y una oferta que caduca por NIP-40 no emite
+ningún evento, de modo que en directo es indetectable por definición. Al arrancar se compara
+lo publicado con el estado real del relay y se corrige en ambos sentidos. `obtener_pending`
+devuelve `None` cuando el relay no contesta, y no un diccionario vacío: confundir «no queda
+ninguna oferta» con «no me han contestado» vaciaría el canal entero durante una caída del
+relay.
+
+### Servicios systemd
+
+Las unidades están versionadas en `systemd/`, con las rutas de este nodo. Para otro
+directorio o usuario, ajústalas antes de instalar:
+
+```bash
+sed -i 's|/home/admin/mostro-sources/scripts|/tu/ruta|g; s|^User=admin|User=tuusuario|' systemd/*.service
+sudo cp systemd/* /etc/systemd/system/
+sudo install -m 755 bin/mostro-snapshot /usr/local/bin/
+sudo mkdir -p /var/lib/mostro-snapshot && sudo chown mostro:admin /var/lib/mostro-snapshot
+sudo chmod 2750 /var/lib/mostro-snapshot     # setgid: los ficheros heredan el grupo
+sudo systemctl daemon-reload
+sudo systemctl enable --now mostrobot mostrobot-nostr mostro-accounting mostro-snapshot.timer
+```
+
+El `2750` no es cosmético: sin el bit setgid, las instantáneas que crea `mostro` nacen con
+grupo `mostro` y el usuario que consulta no puede leerlas.
+
+| Unidad | Qué ejecuta |
+|--------|-------------|
+| `mostrobot.service` | `bot/bot.py` — ofertas en Telegram |
+| `mostrobot-nostr.service` | `bot/bot-nostr.py` — ofertas en Nostr |
+| `mostro-accounting.service` | `accounting/accounting.py` — contabilidad en tiempo real |
+| `mostro-snapshot.service` + `.timer` | `bin/mostro-snapshot` — instantánea cada minuto |
+
+### Cron
+
+```cron
+# Datos de la web y resumen diario en Telegram
+0 0 * * * /home/admin/mostro-sources/scripts/bot/premiums.sh >> /home/admin/mostro-premiums.log 2>&1
+
+# Alerta de canales LND caídos
+*/10 * * * * /home/admin/mostro-sources/scripts/admin/check_channels.sh >> /var/log/check_channels.log 2>&1
+
+# Informe financiero del mes recién cerrado
+30 0 1 * * /usr/bin/python3 /home/admin/mostro-sources/scripts/accounting/informe-mensual.py >> /home/admin/informe-mensual.log 2>&1
+```
+
+## Tests
+
+Sin framework: cada test es un script suelto con asserts, ejecutable tal cual en el
+servidor. `run-tests.sh` los encadena y añade una comprobación de sintaxis de todos los
+`.py` y `.sh`.
+
+```bash
+./run-tests.sh
+```
 
 ## Estructura
 
 ```
 .
 ├── .env.example            # Plantilla de configuración
-├── .gitignore              # Excluye .env, logs, orders y cache
+├── .gitignore              # Excluye .env, logs, bases, orders y estado
+├── run-tests.sh            # Lanza todas las comprobaciones
 ├── images/                 # Capturas de pantalla
+├── lib/
+│   ├── entorno.py          # Carga del .env por ruta absoluta
+│   ├── formato.py          # Formateo de cifras
+│   ├── estado.py           # Persistencia JSON
+│   ├── telegram.py         # Envío por Telegram
+│   └── test-lib.py         # Comprobaciones de lib/
 ├── admin/
-│   ├── env.sh              # Configuración compartida (cargado por todos los .sh)
+│   ├── env.sh              # Configuración y helpers compartidos (sql_ro, telegram_enviar)
 │   ├── setup.sh            # Asistente de configuración interactivo
 │   ├── status.sh           # Estado del nodo
 │   ├── update.sh           # Actualización de componentes (GPG+SHA256, backup BD, rollback)
 │   ├── rollback.sh         # Rollback de componentes
 │   └── check_channels.sh   # Alerta Telegram si >2 canales LND caídos
 ├── tools/
-│   ├── order.sh            # Consulta de órdenes en base de datos
+│   ├── order.sh            # Consulta de órdenes
 │   ├── report.sh           # Informe financiero de actividad
 │   ├── logs.sh             # Búsqueda en logs
 │   └── monitor.sh          # Monitor de transacciones BTC
-└── bot/
-    ├── premiums.sh         # Generador de datos para GitHub Pages
-    ├── bot.py              # Bot de ofertas para Telegram
-    ├── bot-nostr.py        # Bot de ofertas para Nostr
-    ├── common.py           # Módulo compartido por los bots Python
-    └── test-telegram.py    # Test de Telegram
+├── accounting/
+│   ├── accounting.py       # Contabilidad en tiempo real (servicio)
+│   └── informe-mensual.py  # Informe financiero mensual
+├── bot/
+│   ├── premiums.sh         # Generador de datos para GitHub Pages
+│   ├── bot.py              # Bot de ofertas para Telegram
+│   ├── bot-nostr.py        # Bot de ofertas para Nostr
+│   ├── common.py           # Módulo del relay de Mostro
+│   ├── resumen.py          # Resumen diario agregado
+│   ├── resolver-chat-id.py # Ayuda a averiguar un chat_id
+│   ├── test-telegram.py    # Test de credenciales de Telegram
+│   └── test-reconciliacion.py
+├── systemd/                # Unidades systemd versionadas
+└── bin/
+    └── mostro-snapshot     # Instantánea de solo lectura de las bases
 ```
