@@ -4,5 +4,6 @@ __pycache__/
 *.pyc
 orders.json
 orders_nostr.json
+resumen-enviado.json
 .env.bak
 accounting/accounting.db

@@ -45,11 +45,14 @@ trades_json=$(run_sql "$DB_PATH" -json "
 [ -z "$trades_json" ] && trades_json="[]"
 
 # --- Query 2: Premium medio diario (para el gráfico) ---
+# avg_btc_price se restringe a EUR: promediar precios de distintas divisas no significa
+# nada (un trade en CUP disparaba la media del día a millones).
 daily_json=$(run_sql "$DB_PATH" -json "
     SELECT
         DATE(created_at, 'unixepoch') as date,
         ROUND(AVG(premium), 1) as avg_premium,
-        CAST(ROUND(AVG(fiat_amount * 100000000.0 / amount)) AS INTEGER) as avg_btc_price,
+        CAST(ROUND(AVG(CASE WHEN fiat_code = 'EUR'
+                            THEN fiat_amount * 100000000.0 / amount END)) AS INTEGER) as avg_btc_price,
         COUNT(*) as trades
     FROM orders
     WHERE status = 'success'
@@ -85,23 +88,23 @@ trades_7d="${trades_7d:-0}"
 trades_30d="${trades_30d:-0}"
 
 # --- Query 4: Mediana del precio BTC/EUR del último día con trades ---
+# Acotado a 30 días como el resto: sin esta ventana el precio se quedaba congelado y la web
+# mostraba como actual una cotización de semanas atrás durante las rachas sin trades.
 last_price=$(run_sql "$DB_PATH" -separator '|' "
-    WITH last_day AS (
-      SELECT DATE(created_at, 'unixepoch') AS d
+    WITH reciente AS (
+      SELECT DATE(created_at, 'unixepoch') AS d,
+             CAST(ROUND(fiat_amount * 100000000.0 / amount) AS INTEGER) AS precio,
+             fiat_amount * 1.0 / amount AS ratio
       FROM orders
       WHERE status = 'success' AND amount > 0 AND fiat_code = 'EUR'
-      ORDER BY created_at DESC
-      LIMIT 1
-    )
-    SELECT CAST(ROUND(fiat_amount * 100000000.0 / amount) AS INTEGER)
-    FROM orders
-    WHERE status = 'success' AND amount > 0 AND fiat_code = 'EUR'
-      AND DATE(created_at, 'unixepoch') = (SELECT d FROM last_day)
-    ORDER BY fiat_amount * 1.0 / amount
+        AND created_at >= CAST(STRFTIME('%s', 'now', '-30 days') AS INTEGER)
+    ),
+    last_day AS (SELECT MAX(d) AS d FROM reciente)
+    SELECT precio FROM reciente
+    WHERE d = (SELECT d FROM last_day)
+    ORDER BY ratio
     LIMIT 1 OFFSET (
-      SELECT COUNT(*) / 2 FROM orders
-      WHERE status = 'success' AND amount > 0 AND fiat_code = 'EUR'
-        AND DATE(created_at, 'unixepoch') = (SELECT d FROM last_day)
+      SELECT COUNT(*) / 2 FROM reciente WHERE d = (SELECT d FROM last_day)
     )
 ")
 last_price="${last_price:-null}"
@@ -181,8 +184,19 @@ git pull --rebase --quiet 2>/dev/null || true
 git add data/premiums.json
 if git diff --cached --quiet; then
     echo "Sin cambios, no se hace push"
-    exit 0
+else
+    git commit -m "Update premiums data ($NOW)" --quiet
+    # Un push fallido (GitHub caído, sin red) no debe abortar el script bajo 'set -e':
+    # el resumen de Telegram se intenta igualmente.
+    if git push --quiet 2>&1; then
+        echo "Push completado"
+    else
+        echo "Aviso: push fallido, el JSON local sí se ha generado"
+    fi
 fi
-git commit -m "Update premiums data ($NOW)" --quiet
-git push --quiet 2>&1
-echo "Push completado"
+
+# --- Resumen en Telegram ---
+# Va después del push y fuera de cualquier salida temprana: el resumen debe intentarse
+# aunque no haya habido cambios que publicar. Un fallo aquí no invalida el trabajo ya
+# hecho, así que no se propaga pese al 'set -e'.
+python3 "$SCRIPT_DIR/resumen.py" || echo "Aviso: resumen de Telegram no enviado"
