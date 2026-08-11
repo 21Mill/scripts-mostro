@@ -84,11 +84,7 @@ Resumen:
 Canales inactivos:
 ${inactive_list}"
 
-    curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-        --data-urlencode "chat_id=${CHAT_ID}" \
-        --data-urlencode "text=${message}" \
-        --data-urlencode "parse_mode=Markdown" \
-        -o /dev/null
+    telegram_enviar "$BOT_TOKEN" "$CHAT_ID" "$message" Markdown >/dev/null
 
     echo "Alerta enviada: $inactive canales caídos"
 else

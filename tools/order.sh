@@ -26,19 +26,12 @@ if [[ -z "$1" ]]; then
     exit 1
 fi
 
-DB_PATH="${MOSTRO_DB_RO:-/var/lib/mostro-snapshot/mostro.db}"
-DISPUTES_DB="${MOSTRO_DISPUTES_DB_RO:-/var/lib/mostro-snapshot/disputes.db}"
-DB_USER="${MOSTRO_USER:-mostro}"
-
-run_sql() {
-    local db="$1"
-    shift
-    # Lee la instantánea de solo lectura: ya no hace falta sudo. Ver mostro-snapshot(8).
-    sqlite3 -readonly "$db" "$@" 2>/dev/null
-}
+# sql_ro() y el porqué de la instantánea están en admin/env.sh.
+DB_PATH="$MOSTRO_DB_RO"
+DISPUTES_DB="$MOSTRO_DISPUTES_DB_RO"
 
 # Verificar acceso a la DB
-if ! run_sql "$DB_PATH" "SELECT 1" >/dev/null 2>&1; then
+if ! sql_ro "$DB_PATH" "SELECT 1" >/dev/null 2>&1; then
     echo -e "${RED}Error:${NC} No se pudo acceder a la base de datos en $DB_PATH"
     echo -e "  Comprueba que el archivo existe y tienes permisos (o sudo) para acceder."
     exit 1
@@ -188,7 +181,7 @@ if [[ "$1" == "--stats" ]]; then
 
     echo -e "${BOLD}${CYAN}═══ Estadisticas de Mostro $PERIOD_LABEL ═══${NC}"
     echo ""
-    stats=$(run_sql "$DB_PATH" -separator '|' "
+    stats=$(sql_ro "$DB_PATH" -separator '|' "
         SELECT
             COUNT(*) as total,
             SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) as completadas,
@@ -236,7 +229,7 @@ if [[ "$1" == "--stats" ]]; then
     echo ""
 
     # Monedas usadas
-    monedas=$(run_sql "$DB_PATH" -separator '|' "
+    monedas=$(sql_ro "$DB_PATH" -separator '|' "
         SELECT fiat_code, COUNT(*) as n,
             SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) as ok,
             SUM(CASE WHEN status='success' THEN fiat_amount ELSE 0 END) as vol_fiat,
@@ -252,7 +245,7 @@ if [[ "$1" == "--stats" ]]; then
     echo ""
 
     # Usuarios activos
-    users=$(run_sql "$DB_PATH" "SELECT COUNT(*) FROM users")
+    users=$(sql_ro "$DB_PATH" "SELECT COUNT(*) FROM users")
     echo -e "  ${BOLD}Usuarios registrados:${NC} $users"
     echo ""
     exit 0
@@ -262,7 +255,7 @@ fi
 if [[ "$1" == "--recent" ]]; then
     echo -e "${BOLD}${CYAN}═══ Ultimas 10 ordenes ═══${NC}"
     echo ""
-    results=$(run_sql "$DB_PATH" -separator '|' "
+    results=$(sql_ro "$DB_PATH" -separator '|' "
         SELECT $UUID_SQL, kind, status, fiat_code, fiat_amount, min_amount, max_amount, amount, created_at
         FROM orders ORDER BY created_at DESC LIMIT 10
     ")
@@ -298,7 +291,7 @@ fi
 if [[ "$1" == "--pending" ]]; then
     echo -e "${BOLD}${CYAN}═══ Ordenes pendientes ═══${NC}"
     echo ""
-    results=$(run_sql "$DB_PATH" -separator '|' "
+    results=$(sql_ro "$DB_PATH" -separator '|' "
         SELECT $UUID_SQL, kind, fiat_code, fiat_amount, min_amount, max_amount, amount, premium, payment_method, created_at, expires_at
         FROM orders WHERE status='pending' ORDER BY created_at DESC
     ")
@@ -323,7 +316,7 @@ fi
 if [[ "$1" == "--active" ]]; then
     echo -e "${BOLD}${CYAN}═══ Ordenes en curso ═══${NC}"
     echo ""
-    results=$(run_sql "$DB_PATH" -separator '|' "
+    results=$(sql_ro "$DB_PATH" -separator '|' "
         SELECT $UUID_SQL, kind, status, fiat_code, fiat_amount, min_amount, max_amount, amount, payment_method, taken_at, created_at
         FROM orders
         WHERE status NOT IN ('pending','success','canceled','canceled-by-admin','cooperatively-canceled','expired')
@@ -360,7 +353,7 @@ else
     WHERE_CLAUSE="HEX(id) LIKE '${ORDER_INPUT}%'"
 fi
 
-result=$(run_sql "$DB_PATH" -separator '|' "
+result=$(sql_ro "$DB_PATH" -separator '|' "
     SELECT
         $UUID_SQL,
         kind, status, event_id, hash, preimage,
@@ -558,7 +551,7 @@ while IFS='|' read -r uuid kind status event_id hash preimage \
     fi
 
     # --- Disputa en disputes.db ---
-    dispute=$(run_sql "$DISPUTES_DB" -separator '|' "
+    dispute=$(sql_ro "$DISPUTES_DB" -separator '|' "
         SELECT
             LOWER(
                 SUBSTR(HEX(id),1,8) || '-' ||

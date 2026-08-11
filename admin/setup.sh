@@ -173,6 +173,8 @@ if [ -n "$TELEGRAM_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
     echo -en "${BOLD}¿Enviar mensaje de prueba a Telegram? [s/N]: ${NC}"
     read -r test_tg
     if [[ "$test_tg" =~ ^[sS]$ ]]; then
+        # No usa telegram_enviar() de env.sh a propósito: setup.sh es quien genera el .env,
+        # así que no puede depender del fichero que todavía no existe.
         response=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
             -d "chat_id=${TELEGRAM_CHAT_ID}" \
             -d "text=🧌 Mostro Scripts configurado correctamente!" 2>&1)

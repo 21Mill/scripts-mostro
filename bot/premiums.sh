@@ -6,21 +6,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../admin/env.sh"
 
-DB_PATH="${MOSTRO_DB_RO:-/var/lib/mostro-snapshot/mostro.db}"
+# sql_ro() y el porqué de la instantánea están en admin/env.sh.
+DB_PATH="$MOSTRO_DB_RO"
 WEB_REPO="${NOSTROMOSTRO_WEB_REPO:-$HOME/nostromostro.github.io}"
 
-run_sql() {
-    local db="$1"
-    shift
-    # Lee la instantánea de solo lectura que publica mostro-snapshot.timer. Antes esto
-    # recurría a 'sudo -u mostro sqlite3', una regla NOPASSWD que en la práctica daba shell
-    # completa como mostro: sqlite3 ejecuta órdenes con .shell y, aun con -readonly,
-    # SELECT writefile() escribe ficheros desde SQL puro.
-    sqlite3 -readonly "$db" "$@" 2>/dev/null
-}
-
 # Verificar acceso
-if ! run_sql "$DB_PATH" "SELECT 1" >/dev/null 2>&1; then
+if ! sql_ro "$DB_PATH" "SELECT 1" >/dev/null 2>&1; then
     echo "Error: No se pudo acceder a la base de datos en $DB_PATH" >&2
     exit 1
 fi
@@ -33,7 +24,7 @@ fi
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # --- Query 1: Trades individuales (últimos 30 días) ---
-trades_json=$(run_sql "$DB_PATH" -json "
+trades_json=$(sql_ro "$DB_PATH" -json "
     SELECT
         premium,
         fiat_code,
@@ -50,7 +41,7 @@ trades_json=$(run_sql "$DB_PATH" -json "
 # --- Query 2: Premium medio diario (para el gráfico) ---
 # avg_btc_price se restringe a EUR: promediar precios de distintas divisas no significa
 # nada (un trade en CUP disparaba la media del día a millones).
-daily_json=$(run_sql "$DB_PATH" -json "
+daily_json=$(sql_ro "$DB_PATH" -json "
     SELECT
         DATE(created_at, 'unixepoch') as date,
         ROUND(AVG(premium), 1) as avg_premium,
@@ -67,7 +58,7 @@ daily_json=$(run_sql "$DB_PATH" -json "
 [ -z "$daily_json" ] && daily_json="[]"
 
 # --- Query 3: Stats agregados ---
-stats_raw=$(run_sql "$DB_PATH" -separator '|' "
+stats_raw=$(sql_ro "$DB_PATH" -separator '|' "
     SELECT
         ROUND(AVG(CASE WHEN created_at >= CAST(STRFTIME('%s','now','-1 day') AS INTEGER) THEN premium END), 1),
         ROUND(AVG(CASE WHEN created_at >= CAST(STRFTIME('%s','now','-7 days') AS INTEGER) THEN premium END), 1),
@@ -93,7 +84,7 @@ trades_30d="${trades_30d:-0}"
 # --- Query 4: Mediana del precio BTC/EUR del último día con trades ---
 # Acotado a 30 días como el resto: sin esta ventana el precio se quedaba congelado y la web
 # mostraba como actual una cotización de semanas atrás durante las rachas sin trades.
-last_price=$(run_sql "$DB_PATH" -separator '|' "
+last_price=$(sql_ro "$DB_PATH" -separator '|' "
     WITH reciente AS (
       SELECT DATE(created_at, 'unixepoch') AS d,
              CAST(ROUND(fiat_amount * 100000000.0 / amount) AS INTEGER) AS precio,
@@ -113,7 +104,7 @@ last_price=$(run_sql "$DB_PATH" -separator '|' "
 last_price="${last_price:-null}"
 
 # --- Query 5: Métodos de pago (normalizado a categorías) ---
-payment_raw=$(run_sql "$DB_PATH" -separator '|' "
+payment_raw=$(sql_ro "$DB_PATH" -separator '|' "
     SELECT payment_method FROM orders
     WHERE status = 'success' AND amount > 0
       AND created_at >= CAST(STRFTIME('%s', 'now', '-30 days') AS INTEGER)

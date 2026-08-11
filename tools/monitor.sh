@@ -64,10 +64,7 @@ FALLBACK_URL="https://blockstream.info/api/tx/$TXID"
 send_telegram() {
     local MESSAGE="$1"
     if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$CHAT_ID" ]; then
-        curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "text=${MESSAGE}" \
-            -d "parse_mode=HTML" > /dev/null
+        telegram_enviar "$TELEGRAM_BOT_TOKEN" "$CHAT_ID" "$MESSAGE" HTML >/dev/null
     fi
 }
 
