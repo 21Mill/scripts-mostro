@@ -7,3 +7,4 @@ orders_nostr.json
 resumen-enviado.json
 .env.bak
 accounting/accounting.db
+informe-mensual-enviado.json
