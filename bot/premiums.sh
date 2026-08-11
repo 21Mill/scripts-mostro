@@ -6,14 +6,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../admin/env.sh"
 
-DB_PATH="${MOSTRO_DB:-/data/mostro/mostro.db}"
-DB_USER="${MOSTRO_USER:-mostro}"
+DB_PATH="${MOSTRO_DB_RO:-/var/lib/mostro-snapshot/mostro.db}"
 WEB_REPO="${NOSTROMOSTRO_WEB_REPO:-$HOME/nostromostro.github.io}"
 
 run_sql() {
     local db="$1"
     shift
-    sqlite3 "$db" "$@" 2>/dev/null || sudo -u "$DB_USER" sqlite3 "$db" "$@" 2>/dev/null
+    # Lee la instantánea de solo lectura que publica mostro-snapshot.timer. Antes esto
+    # recurría a 'sudo -u mostro sqlite3', una regla NOPASSWD que en la práctica daba shell
+    # completa como mostro: sqlite3 ejecuta órdenes con .shell y, aun con -readonly,
+    # SELECT writefile() escribe ficheros desde SQL puro.
+    sqlite3 -readonly "$db" "$@" 2>/dev/null
 }
 
 # Verificar acceso

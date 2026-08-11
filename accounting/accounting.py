@@ -27,7 +27,9 @@ load_dotenv(ENV_FILE)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_MONITOR_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_MONITOR_CHAT_ID")
-MOSTRO_DB = os.getenv("MOSTRO_DB", "/opt/mostro/mostro.db")
+# Instantánea de solo lectura publicada por mostro-snapshot.timer: leerla no requiere
+# privilegios, así que se pudo retirar la regla sudo que daba shell como mostro.
+MOSTRO_DB = os.getenv("MOSTRO_DB_RO", "/var/lib/mostro-snapshot/mostro.db")
 
 ACCOUNTING_DB = Path(__file__).parent / "accounting.db"
 POLL_INTERVAL = 60  # segundos
@@ -95,7 +97,7 @@ def get_totals(con):
 
 def query_mostro(sql):
     result = subprocess.run(
-        ["sudo", "-u", "mostro", "sqlite3", "-separator", "|", MOSTRO_DB, sql],
+        ["sqlite3", "-readonly", "-separator", "|", MOSTRO_DB, sql],
         capture_output=True, timeout=30
     )
     if result.returncode != 0:

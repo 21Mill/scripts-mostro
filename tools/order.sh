@@ -26,19 +26,15 @@ if [[ -z "$1" ]]; then
     exit 1
 fi
 
-DB_PATH="${MOSTRO_DB:-/opt/mostro/mostro.db}"
-DISPUTES_DB="${MOSTRO_DISPUTES_DB:-/opt/mostro/disputes.db}"
+DB_PATH="${MOSTRO_DB_RO:-/var/lib/mostro-snapshot/mostro.db}"
+DISPUTES_DB="${MOSTRO_DISPUTES_DB_RO:-/var/lib/mostro-snapshot/disputes.db}"
 DB_USER="${MOSTRO_USER:-mostro}"
 
 run_sql() {
     local db="$1"
     shift
-    # Intentar directamente, si falla usar sudo -u $DB_USER
-    if sqlite3 "$db" "$@" 2>/dev/null; then
-        return 0
-    else
-        sudo -u "$DB_USER" sqlite3 "$db" "$@" 2>/dev/null
-    fi
+    # Lee la instantánea de solo lectura: ya no hace falta sudo. Ver mostro-snapshot(8).
+    sqlite3 -readonly "$db" "$@" 2>/dev/null
 }
 
 # Verificar acceso a la DB

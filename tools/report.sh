@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../admin/env.sh"
 
-DB_PATH="${MOSTRO_DB:-/data/mostro/mostro.db}"
+DB_PATH="${MOSTRO_DB_RO:-/var/lib/mostro-snapshot/mostro.db}"
 DB_USER="${MOSTRO_USER:-mostro}"
 
 # ── Colores ───────────────────────────────────────────────────────────────────
@@ -16,7 +16,8 @@ ORANGE='\033[38;5;214m'; CYAN='\033[0;36m'; GREEN='\033[0;32m'
 YELLOW='\033[1;33m'; RED='\033[0;31m'; DIM='\033[2m'
 
 # ── SQL helper ────────────────────────────────────────────────────────────────
-sql() { sqlite3 "$DB_PATH" "$@" 2>/dev/null || sudo -u "$DB_USER" sqlite3 "$DB_PATH" "$@" 2>/dev/null; }
+# Lee la instantánea de solo lectura: ya no hace falta sudo. Ver mostro-snapshot(8).
+sql() { sqlite3 -readonly "$DB_PATH" "$@" 2>/dev/null; }
 
 # ── Formateo ──────────────────────────────────────────────────────────────────
 fmt_sats() { local n="${1:-0}"; [ "$n" = "NULL" ] || [ -z "$n" ] && n=0; printf "%'d" "$n"; }

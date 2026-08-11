@@ -37,6 +37,12 @@ WATCHDOG_SERVICE="${WATCHDOG_SERVICE:-mostro-watchdog.service}"
 BOT_SERVICE="${BOT_SERVICE:-mostrobot.service}"
 BACKUP_DIR="${BACKUP_DIR:-$_OWNER_HOME/mostro-sources/backups}"
 MOSTRO_DB="${MOSTRO_DB:-$MOSTROD_SRC/mostro.db}"
+
+# Instantáneas de solo lectura publicadas por mostro-snapshot.timer. Las herramientas de
+# informes leen de aquí SIN sudo; MOSTRO_DB sigue apuntando a la base real porque
+# update.sh y status.sh sí necesitan el original (respaldos previos a una actualización).
+MOSTRO_DB_RO="${MOSTRO_DB_RO:-/var/lib/mostro-snapshot/mostro.db}"
+MOSTRO_DISPUTES_DB_RO="${MOSTRO_DISPUTES_DB_RO:-/var/lib/mostro-snapshot/disputes.db}"
 MOSTRO_LOG="${MOSTRO_LOG:-}"
 
 # --- Colores ---
