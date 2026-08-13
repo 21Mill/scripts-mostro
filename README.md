@@ -255,11 +255,25 @@ Genera `data/premiums.json` con los premiums anonimizados, lo sube a GitHub Page
 ### bot/resumen.py
 
 Resumen diario agregado en Telegram: trades y premium medio de las últimas 24 h y de los
-últimos 30 días, precio BTC/EUR y métodos de pago más usados.
+últimos 30 días, precio BTC/EUR y métodos de pago más usados. Si no hubo trades en 24 h, no
+envía nada.
 
-Se alimenta de `data/premiums.json` —el mismo fichero anonimizado que ya sirve la web— y no
-de la base de datos: así nada de lo que salga por aquí puede revelar algo que no esté ya
-publicado. Si no hubo trades en 24 h, no envía nada.
+Esa parte se alimenta de `data/premiums.json` —el mismo fichero anonimizado que ya sirve la
+web— y no de la base de datos: nada de lo que salga de ahí puede revelar algo que no esté ya
+publicado.
+
+**Bloque de cuentas.** Al final del mensaje se añaden las cuentas del día recién cerrado
+leídas de `accounting/accounting.db`: ganancia neta (con su equivalente en euros), volumen
+intercambiado, número de operaciones, desglose de fee, dev fee y routing, y el acumulado del
+mes en curso. La ventana es el día natural en hora local, el mismo criterio que las barras
+del gráfico de la web y que el informe mensual —de ahí que el encabezado lleve la fecha, para
+no confundirlo con la cifra de 24 h móviles que aparece más arriba en el mismo mensaje.
+
+Eso es información privada, así que **solo se incluye si el destino se verifica privado**:
+un id numérico que no sea `TELEGRAM_CHAT_ID` ni `TELEGRAM_TEST_CHAT_ID`, los dos apuntando al
+canal público de ofertas. Reapuntar el resumen a un canal hace que el bloque desaparezca, no
+que se publique. Si `accounting.db` no está disponible, se avisa por stdout y el resto del
+resumen sale igual: una avería de la contabilidad no debe costarnos también el resumen.
 
 ```bash
 python3 bot/resumen.py --dry-run    # imprime el mensaje sin enviarlo
@@ -314,9 +328,14 @@ solo para formatear un número.
 | Módulo | Contiene |
 |--------|----------|
 | `lib/entorno.py` | Localiza y carga el `.env`, siempre por ruta absoluta |
-| `lib/formato.py` | Cifras con las convenciones españolas (`formato_sats`, `formato_euros`, `con_signo`) |
+| `lib/formato.py` | Cifras y fechas con las convenciones españolas (`formato_sats`, `formato_euros`, `con_signo`, `fecha_larga`) |
 | `lib/estado.py` | Persistencia en JSON del estado de cada script |
 | `lib/telegram.py` | Envío y borrado de mensajes, y lectura de credenciales de un `config.toml` |
+| `lib/contabilidad.py` | Consultas de solo lectura sobre `accounting.db` y las ventanas de día y mes en hora local |
+
+`lib/contabilidad.py` es lo que mantiene cuadradas las dos vistas de las mismas cuentas: el
+informe mensual y el bloque diario del resumen usan la misma consulta y el mismo criterio de
+día local, y solo se diferencian en la ventana que le pasan.
 
 `bot/common.py` es el módulo del relay: conexión con reconexión automática, parseo de
 eventos kind 38383 y el texto de una oferta (HTML para Telegram, plano para Nostr).
@@ -388,9 +407,10 @@ servidor. `run-tests.sh` los encadena y añade una comprobación de sintaxis de 
 ├── images/                 # Capturas de pantalla
 ├── lib/
 │   ├── entorno.py          # Carga del .env por ruta absoluta
-│   ├── formato.py          # Formateo de cifras
+│   ├── formato.py          # Formateo de cifras y fechas
 │   ├── estado.py           # Persistencia JSON
 │   ├── telegram.py         # Envío por Telegram
+│   ├── contabilidad.py     # Consultas sobre accounting.db y ventanas locales
 │   └── test-lib.py         # Comprobaciones de lib/
 ├── admin/
 │   ├── env.sh              # Configuración y helpers compartidos (sql_ro, telegram_enviar)
@@ -415,7 +435,8 @@ servidor. `run-tests.sh` los encadena y añade una comprobación de sintaxis de 
 │   ├── resumen.py          # Resumen diario agregado
 │   ├── resolver-chat-id.py # Ayuda a averiguar un chat_id
 │   ├── test-telegram.py    # Test de credenciales de Telegram
-│   └── test-reconciliacion.py
+│   ├── test-reconciliacion.py
+│   └── test-resumen.py     # Guardia de destino y bloque de cuentas
 ├── systemd/                # Unidades systemd versionadas
 └── bin/
     └── mostro-snapshot     # Instantánea de solo lectura de las bases
