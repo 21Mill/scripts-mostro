@@ -1,10 +1,23 @@
 """
-formato.py — Formateo de cifras con las convenciones españolas.
+formato.py — Formateo de cifras y fechas con las convenciones españolas.
 
 Punto para los miles y coma para los decimales, que es al revés que en Python. Estaba
 escrito tres veces (common.py, accounting.py, informe-mensual.py) con pequeñas diferencias
 entre las copias.
+
+Los meses en castellano y en minúscula: strftime('%B') depende del locale del proceso, y
+cron no hereda el del operador, así que un informe lanzado por cron saldría en inglés.
 """
+
+MESES = [
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+]
+
+
+def fecha_larga(fecha):
+    """date(2026, 8, 12) -> '12 de agosto'. Sin año: quien lo lee sabe en cuál está."""
+    return f"{fecha.day} de {MESES[fecha.month - 1]}"
 
 
 def formato_sats(valor):

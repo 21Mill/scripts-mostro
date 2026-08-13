@@ -13,7 +13,6 @@ Lo lanza cron el día 1 de cada mes a las 00:30, informando del mes recién cerr
 import argparse
 import json
 import os
-import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -21,9 +20,10 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 
+from lib.contabilidad import abrir, consultar, rango_mes
 from lib.entorno import cargar_env
 from lib.estado import cargar_estado, guardar_estado
-from lib.formato import con_signo, formato_euros, formato_sats
+from lib.formato import MESES, con_signo, formato_euros, formato_sats
 from lib.telegram import enviar
 
 ACCOUNTING_DB = SCRIPT_DIR / "accounting.db"
@@ -46,58 +46,12 @@ CHAT_ID = os.getenv("TELEGRAM_STATS_CHAT_ID") or os.getenv("TELEGRAM_MONITOR_CHA
 
 SEPARADOR = "━━━━━━━━━━━━━━━━━━━━━"
 
-MESES = [
-    "enero", "febrero", "marzo", "abril", "mayo", "junio",
-    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
-]
-
 
 # --- Datos ------------------------------------------------------------------
 
 
-def rango_mes(anio, mes):
-    """Límites del mes en hora local, como epoch.
-
-    datetime(...).timestamp() interpreta en la zona del sistema, que es lo que queremos:
-    "agosto" es el agosto del operador, no el de UTC. Se devuelve el inicio del mes
-    siguiente en vez del final del actual para no depender del número de días ni de los
-    cambios de horario.
-    """
-    inicio = datetime(anio, mes, 1).timestamp()
-    if mes == 12:
-        fin = datetime(anio + 1, 1, 1).timestamp()
-    else:
-        fin = datetime(anio, mes + 1, 1).timestamp()
-    return int(inicio), int(fin)
-
-
-def consultar(con, anio, mes):
-    inicio, fin = rango_mes(anio, mes)
-    # completed_at guarda en realidad el taken_at de la orden: el momento en que se tomó,
-    # no en el que se liquidó. La diferencia son minutos y solo importaría para una
-    # operación a caballo entre dos meses. Se deja así porque cambiar el criterio
-    # reasignaría de mes operaciones ya notificadas en su día.
-    fila = con.execute(
-        """
-        SELECT COUNT(*),
-               COALESCE(SUM(net_profit), 0),
-               COALESCE(SUM(fee), 0),
-               COALESCE(SUM(dev_fee), 0),
-               COALESCE(SUM(routing_buyer + routing_devs), 0),
-               COALESCE(SUM(amount), 0)
-        FROM earnings
-        WHERE completed_at >= ? AND completed_at < ?
-        """,
-        (inicio, fin),
-    ).fetchone()
-    return {
-        "operaciones": fila[0],
-        "neto": fila[1],
-        "fee": fila[2],
-        "dev_fee": fila[3],
-        "routing": fila[4],
-        "volumen": fila[5],
-    }
+def consultar_mes(con, anio, mes):
+    return consultar(con, *rango_mes(anio, mes))
 
 
 def precio_btc():
@@ -203,11 +157,11 @@ def main():
         print(f"El informe de {clave} ya se envió, no se repite")
         return 0
 
-    con = sqlite3.connect(f"file:{ACCOUNTING_DB}?mode=ro", uri=True)
+    con = abrir(ACCOUNTING_DB)
     try:
-        datos = consultar(con, anio, mes)
+        datos = consultar_mes(con, anio, mes)
         prev_anio, prev_mes = mes_anterior(anio, mes)
-        previo = consultar(con, prev_anio, prev_mes)
+        previo = consultar_mes(con, prev_anio, prev_mes)
         # Sin datos previos no hay comparativa que hacer: el primer mes de la contabilidad
         # tendría un mes anterior a cero que no significa "no se ganó nada", sino "no había
         # instancia". Distinguirlo es el motivo de mirar si existe alguna fila anterior.
