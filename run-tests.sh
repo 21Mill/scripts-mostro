@@ -25,6 +25,7 @@ ejecutar() {
 
 ejecutar lib test-lib.py
 ejecutar bot test-reconciliacion.py
+ejecutar bot test-resumen.py
 
 # Comprobación de sintaxis: barata y atrapa el error más tonto antes de reiniciar un
 # servicio en producción.

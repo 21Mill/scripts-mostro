@@ -1,9 +1,15 @@
 """
-resumen.py — Publica en Telegram el resumen agregado de la actividad de NostroMostro.
+resumen.py — Publica en Telegram el resumen diario de la actividad de NostroMostro.
 
-Se alimenta de data/premiums.json, el mismo fichero anonimizado que ya sirve la web, no de
-la base de datos: así nada de lo que salga por aquí puede revelar algo que no esté ya
-publicado, y el script no necesita acceso a mostro.db.
+Tiene dos fuentes, y la diferencia entre ellas es lo que hay que tener presente al tocar
+este fichero:
+
+  - data/premiums.json, el fichero anonimizado que la web ya sirve. Todo lo que sale de
+    ahí es público por definición, no puede revelar nada que no esté ya publicado, y no
+    requiere acceso a mostro.db.
+  - accounting.db, la contabilidad de la instancia: cuánto se ha ganado. Eso es privado, y
+    solo se incluye si el destino se verifica privado (ver destino_privado). Reapuntar el
+    resumen a un canal público hace que el bloque desaparezca, no que se publique.
 
 Lo invoca premiums.sh al final del cron diario de las 00:00.
 """
@@ -11,18 +17,20 @@ Lo invoca premiums.sh al final del cron diario de las 00:00.
 import argparse
 import json
 import os
+import sqlite3
 import sys
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from lib.contabilidad import abrir, consultar, rango_dia, rango_mes
 from lib.entorno import cargar_env
 from lib.estado import cargar_estado, guardar_estado
-from lib.formato import formato_sats
+from lib.formato import MESES, fecha_larga, formato_euros, formato_sats
 from lib.telegram import credenciales_de_toml, enviar
 
-SCRIPT_DIR = Path(__file__).parent
+SCRIPT_DIR = Path(__file__).resolve().parent
 ESTADO_FILE = SCRIPT_DIR / "resumen-enviado.json"
 
 # Por ruta absoluta a propósito: premiums.sh hace 'cd' al repo web antes de invocarnos, así
@@ -33,6 +41,12 @@ WEB_REPO = Path(
     os.getenv("NOSTROMOSTRO_WEB_REPO", str(Path.home() / "nostromostro.github.io"))
 )
 PREMIUMS_FILE = WEB_REPO / "data" / "premiums.json"
+
+# La contabilidad vive en accounting/, un directorio más allá. Sobreescribible por entorno
+# para poder probar contra una base de juguete.
+ACCOUNTING_DB = Path(
+    os.getenv("ACCOUNTING_DB", SCRIPT_DIR.parent / "accounting" / "accounting.db")
+)
 
 URL_MERCADO = "https://nostromostro.github.io/#mercado"
 
@@ -54,6 +68,34 @@ else:
     CHAT_ID = os.getenv("TELEGRAM_STATS_CHAT_ID")
 
 SEPARADOR = "━━━━━━━━━━━━━━━━━━━━━"
+
+
+# --- Destino ----------------------------------------------------------------
+
+
+def destino_privado(chat_id):
+    """¿Puede este chat recibir las cuentas de la instancia?
+
+    Solo un chat privado, es decir: un ID numérico que no sea ninguno de los canales
+    conocidos. Los canales se declaran normalmente con @nombre, pero también se pueden
+    referir por su ID -100..., así que no basta con descartar el arroba: se comparan de
+    forma explícita con TELEGRAM_CHAT_ID y TELEGRAM_TEST_CHAT_ID, que apuntan los dos al
+    canal público de ofertas.
+
+    Ante la duda, False. Un bloque de menos es un fallo visible que el operador reporta;
+    un bloque de más son sus ingresos publicados en abierto.
+    """
+    if not chat_id:
+        return False
+    chat_id = str(chat_id).strip()
+    if not chat_id or chat_id.startswith("@"):
+        return False
+    publicos = {
+        str(os.getenv(v, "")).strip()
+        for v in ("TELEGRAM_CHAT_ID", "TELEGRAM_TEST_CHAT_ID")
+    }
+    publicos.discard("")
+    return chat_id not in publicos
 
 
 # --- Formateo ---------------------------------------------------------------
@@ -91,7 +133,75 @@ def linea_metodos(payment_methods, trades_30d):
     return f"🏦 <b>Métodos:</b>  {' · '.join(top)}"
 
 
-def construir_mensaje(datos):
+# --- Cuentas (solo a destino privado) ---------------------------------------
+
+
+def dia_informado(hoy=None):
+    """El día natural anterior al momento de ejecución.
+
+    Lanzado por el cron de las 00:00 es el día que acaba de cerrarse, que es lo que se
+    quiere informar. Lanzado a mano a media tarde sigue siendo un día completo y bien
+    definido, no un trozo del actual.
+    """
+    return (hoy or date.today()) - timedelta(days=1)
+
+
+def leer_cuentas(fecha):
+    """Agregados del día y del mes al que pertenece. None si la base no está disponible.
+
+    Que la contabilidad falle no debe costarnos también el resumen: sin base, sin bloque,
+    y el resto del mensaje sale igual.
+    """
+    if not ACCOUNTING_DB.exists():
+        return None
+    try:
+        con = abrir(ACCOUNTING_DB)
+    except sqlite3.Error:
+        return None
+    try:
+        return {
+            "dia": consultar(con, *rango_dia(fecha)),
+            # El mes es el del día informado, no el de hoy: el día 1 a las 00:00 se
+            # informa del 31 anterior, y un "acumulado del mes" a cero ahí sería falso.
+            "mes": consultar(con, *rango_mes(fecha.year, fecha.month)),
+        }
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+
+
+def bloque_cuentas(fecha, cuentas, precio):
+    dia = cuentas["dia"]
+    mes = cuentas["mes"]
+
+    lineas = ["", SEPARADOR, f"🔒 <b>Cuentas del {fecha_larga(fecha)}</b>"]
+
+    if dia["operaciones"] == 0:
+        lineas.append("Sin operaciones.")
+    else:
+        neto = f"✅ <b>Ganancia neta:</b>  {formato_sats(dia['neto'])} sats"
+        if precio:
+            euros = dia["neto"] / 100_000_000 * float(precio)
+            neto += f"  (≈ {formato_euros(euros)} €)"
+        lineas += [
+            neto,
+            f"🤝 <b>Operaciones:</b>  {dia['operaciones']}",
+            f"💵 <b>Volumen:</b>  {formato_sats(dia['volumen'])} sats",
+            f"   Fee cobrado:  {formato_sats(dia['fee'])} sats",
+            f"   Dev fee:  −{formato_sats(dia['dev_fee'])} sats",
+            f"   Routing:  −{formato_sats(dia['routing'])} sats",
+        ]
+
+    acumulado = f"{MESES[fecha.month - 1].capitalize()} hasta hoy"
+    lineas.append(
+        f"\n📆 <b>{acumulado}:</b>  {formato_sats(mes['neto'])} sats"
+        f"  ({mes['operaciones']} ops)"
+    )
+    return lineas
+
+
+def construir_mensaje(datos, fecha=None, cuentas=None):
     stats = datos.get("stats", {})
     trades_24h = stats.get("trades_24h") or 0
     trades_30d = stats.get("trades_30d") or 0
@@ -120,6 +230,9 @@ def construir_mensaje(datos):
     metodos = linea_metodos(datos.get("payment_methods"), trades_30d)
     if metodos:
         lineas.append(metodos)
+
+    if cuentas is not None:
+        lineas += bloque_cuentas(fecha, cuentas, precio)
 
     lineas += [
         "",
@@ -175,7 +288,17 @@ def main():
         print(f"El resumen de {hoy} ya se envió, no se repite")
         return 0
 
-    mensaje = construir_mensaje(datos)
+    # Las cuentas solo si el destino es privado. Sin destino resuelto todavía no se puede
+    # afirmar que lo sea, así que tampoco se incluyen: es el mismo criterio que abajo, donde
+    # sin CHAT_ID no se envía nada.
+    fecha = dia_informado()
+    cuentas = None
+    if destino_privado(CHAT_ID):
+        cuentas = leer_cuentas(fecha)
+        if cuentas is None:
+            print(f"⚠️ Contabilidad no disponible en {ACCOUNTING_DB}: resumen sin cuentas")
+
+    mensaje = construir_mensaje(datos, fecha, cuentas)
 
     if args.dry_run:
         print(mensaje)
