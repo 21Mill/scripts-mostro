@@ -46,7 +46,9 @@ MOSTRO_DB="${MOSTRO_DB:-$MOSTROD_SRC/mostro.db}"
 # necesita el original para el respaldo previo a una actualización, y eso sí va con sudo.
 MOSTRO_DB_RO="${MOSTRO_DB_RO:-/var/lib/mostro-snapshot/mostro.db}"
 MOSTRO_DISPUTES_DB_RO="${MOSTRO_DISPUTES_DB_RO:-/var/lib/mostro-snapshot/disputes.db}"
-MOSTRO_LOG="${MOSTRO_LOG:-}"
+# mostro.service escribe a fichero (StandardOutput=append:), no al journal, así que
+# journalctl -u mostro sale siempre vacío. El fichero es legible por todos: sin sudo.
+MOSTRO_LOG="${MOSTRO_LOG:-/var/log/mostro.log}"
 
 # --- Colores ---
 RED='\033[0;31m'
@@ -55,6 +57,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m'
 
 # --- Helper: consultar una base de datos en solo lectura ---
