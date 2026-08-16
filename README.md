@@ -163,6 +163,12 @@ Consulta todos los datos de una orden en la base de datos de Mostro. Soporta bú
 
 Muestra: tipo, estado, montos (incluyendo fiat final en órdenes con rango), comisiones (fee/routing/dev con totales), participantes (pubkeys), datos Lightning (hash/preimage/invoice), disputas, valoraciones, tiempos (con duración del trade) y trade index.
 
+Al consultar una orden concreta añade un bloque **Lightning en vivo (LND)** con lo que la base de datos no guarda: el estado real de la hold invoice del vendedor (`ACCEPTED` = fondos bloqueados sin cobrar, `SETTLED` = cobrada, `CANCELED` = devuelta) y, sobre todo, el pago al comprador con el desglose de sus intentos de HTLC agrupados por código de fallo, la comisión de la ruta más cara intentada frente al techo que impone `max_routing_fee`, y un aviso si queda algún HTLC sin resolver —mientras lo haya, LND no cierra el pago y Mostro no puede reintentar—.
+
+El hash que guarda la orden es el de la hold invoice, no el del pago de salida: ese se localiza decodificando la factura del comprador. Por eso `Intentos: 2, Fallidos: 1` en la parte de base de datos no dice nada de la causa, y este bloque sí.
+
+El bloque se omite sin ruido si `lncli` no está disponible. Cuesta ~1 s con la orden resuelta y ~4 s si hay un pago todavía en vuelo; los listados (`--recent`, `--pending`, `--active`, `--stats`) no consultan LND.
+
 ```bash
 ./tools/order.sh <order_id>       # Consultar una orden (UUID completo)
 ./tools/order.sh 7361b8fe         # Buscar por UUID parcial

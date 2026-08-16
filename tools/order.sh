@@ -115,6 +115,195 @@ format_status() {
     esac
 }
 
+# --- Consulta en vivo a LND ---
+#
+# La base de datos solo guarda contadores: "Intentos: 2, Fallidos: 1" no dice si falta
+# liquidez en la ruta, si el destino rechazó el importe o si el techo de comisión dejó
+# fuera las únicas rutas viables. Eso está en LND, y es lo que hace falta para saber por
+# qué una orden se ha quedado parada. Además la instantánea que lee este script la publica
+# un timer, así que va con retraso; LND responde el estado de ahora mismo.
+
+# LND solo se consulta una vez y en el momento en que se necesita: getinfo cuesta unos
+# cientos de milisegundos y los listados (--recent, --active) no lo usan.
+LND_DISPONIBLE=""
+lnd_disponible() {
+    if [[ -z "$LND_DISPONIBLE" ]]; then
+        if command -v lncli >/dev/null 2>&1 && lncli getinfo >/dev/null 2>&1; then
+            LND_DISPONIBLE="si"
+        else
+            LND_DISPONIBLE="no"
+        fi
+    fi
+    [[ "$LND_DISPONIBLE" == "si" ]]
+}
+
+# trackpayment abre un stream que no termina mientras el pago siga en vuelo, que es
+# justamente el caso interesante. 'jq -n input' consume el primer objeto y sale, pero lncli
+# no recibe el SIGPIPE hasta que le toque emitir la actualización siguiente, y en un pago
+# atascado eso puede tardar minutos: el timeout es lo que de verdad corta. Con un pago ya
+# resuelto lncli termina solo y no se espera nada.
+lnd_pago() {
+    local h="$1"
+    [[ ${#h} -eq 64 ]] || return 1
+    timeout 3 lncli trackpayment --json "$h" 2>/dev/null | jq -n 'input' 2>/dev/null
+}
+
+# Traducción de los códigos de fallo que de verdad aparecen en la operativa. El resto se
+# muestra tal cual: es preferible un código sin traducir que una explicación inventada.
+lnd_explicar_fallo() {
+    case "$1" in
+        TEMPORARY_CHANNEL_FAILURE) echo "sin liquidez suficiente en ese salto" ;;
+        MPP_TIMEOUT)               echo "el pago multiparte expiró sin completarse" ;;
+        UNKNOWN_NEXT_PEER)         echo "el canal siguiente ya no existe" ;;
+        FEE_INSUFFICIENT)          echo "comisión por debajo de la que exige el nodo" ;;
+        EXPIRY_TOO_SOON)           echo "margen de cltv insuficiente" ;;
+        INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS) echo "el destino rechazó importe o hash" ;;
+        *)                         echo "" ;;
+    esac
+}
+
+# Pinta el estado de un pago saliente con el desglose de sus intentos de HTLC.
+# $3 es el techo de comisión en sats, o vacío si no se ha podido calcular.
+# $4 y $5 son líneas ya formateadas —destino y reintentos— que solo el llamante sabe
+# construir; van aquí dentro para que el bloque del pago se lea de un tirón.
+lnd_mostrar_pago() {
+    local etiqueta="$1" json="$2" techo="$3" linea_destino="$4" linea_reintentos="$5"
+    [[ -z "$json" ]] && return 1
+
+    local estado motivo fee valor n_htlc n_vuelo n_fallo fee_max
+    estado=$(jq -r '.status // "?"' <<<"$json")
+    motivo=$(jq -r '.failure_reason // ""' <<<"$json")
+    fee=$(jq -r '.fee_sat // "0"' <<<"$json")
+    valor=$(jq -r '.value_sat // "0"' <<<"$json")
+    n_htlc=$(jq '.htlcs | length' <<<"$json")
+    n_vuelo=$(jq '[.htlcs[] | select(.status=="IN_FLIGHT")] | length' <<<"$json")
+    n_fallo=$(jq '[.htlcs[] | select(.status=="FAILED")] | length' <<<"$json")
+
+    local estado_txt
+    case "$estado" in
+        SUCCEEDED) estado_txt="${GREEN}✅ SUCCEEDED${NC}" ;;
+        IN_FLIGHT) estado_txt="${YELLOW}⏳ IN_FLIGHT${NC}" ;;
+        FAILED)    estado_txt="${RED}❌ FAILED${NC}" ;;
+        *)         estado_txt="$estado" ;;
+    esac
+
+    echo -e "  ${BOLD}$etiqueta${NC}"
+    echo -e "    Importe:   $(format_sats "$valor")"
+    [[ -n "$linea_destino" ]] && echo -e "$linea_destino"
+    if [[ -n "$motivo" && "$motivo" != "FAILURE_REASON_NONE" ]]; then
+        echo -e "    Estado:    $estado_txt  ${DIM}($motivo)${NC}"
+    else
+        echo -e "    Estado:    $estado_txt"
+    fi
+    [[ -n "$linea_reintentos" ]] && echo -e "$linea_reintentos"
+
+    if [[ "$estado" == "SUCCEEDED" ]]; then
+        if [[ "$fee" == "0" || -z "$fee" ]]; then
+            echo -e "    Comision:  ${DIM}0 sats de routing${NC}"
+        else
+            echo -e "    Comision:  $(format_sats "$fee") de routing"
+        fi
+    fi
+
+    if [[ "$n_htlc" -gt 0 ]]; then
+        local resumen="$n_htlc HTLC"
+        [[ "$n_fallo" -gt 0 ]] && resumen="$resumen — ${n_fallo} fallidos"
+        [[ "$n_vuelo" -gt 0 ]] && resumen="$resumen, ${n_vuelo} en vuelo"
+        echo -e "    Intentos:  $resumen"
+
+        # Agrupado por código: veinte líneas de HTLC no se leen, "19 × sin liquidez" sí.
+        while IFS='|' read -r cod cuenta saltos; do
+            [[ -z "$cod" ]] && continue
+            local expl
+            expl=$(lnd_explicar_fallo "$cod")
+            [[ -n "$expl" ]] && expl=" ${DIM}— $expl${NC}"
+            echo -e "      ${RED}${cuenta} ×${NC} $cod ${DIM}(salto $saltos)${NC}$expl"
+        done < <(jq -r '
+            [.htlcs[] | select(.status=="FAILED") | {
+                cod: (.failure.code // "SIN_CODIGO"),
+                idx: (.failure.failure_source_index // 0)
+            }]
+            | group_by(.cod)
+            | map("\(.[0].cod)|\(length)|\(
+                  [.[].idx] | unique | if length==1 then "\(.[0])" else "\(min)–\(max)" end
+              )")
+            | .[]' <<<"$json")
+
+        # La comisión más alta que llegó a intentarse frente al techo: si coinciden, el
+        # límite es lo que está descartando rutas, y eso se corrige en settings.toml. En un
+        # pago que ya salió no aporta nada —repetiría la comisión real—, así que se omite.
+        fee_max=""
+        [[ "$estado" != "SUCCEEDED" ]] && \
+            fee_max=$(jq -r '[.htlcs[].route.total_fees_msat | tonumber] | max / 1000 | floor' <<<"$json" 2>/dev/null)
+        if [[ -n "$fee_max" && "$fee_max" != "null" && "$fee_max" != "0" ]]; then
+            if [[ -n "$techo" && "$techo" != "0" ]]; then
+                echo -e "    Comision:  ${fee_max} sats en la ruta mas cara intentada, techo ${techo} sats"
+                # Ningún HTLC se rechaza por el techo: LND ni siquiera prueba las rutas que
+                # lo superan. Que la escalada de comisión muera pegada al límite no prueba
+                # que el techo sea la causa, pero sí que acotó la búsqueda, y es lo único
+                # que se puede afirmar desde aquí.
+                if [[ "$fee_max" -ge $(( techo * 90 / 100 )) ]]; then
+                    echo -e "      ${YELLOW}⚠${NC}  La busqueda agoto el margen de comision sin encontrar ruta."
+                    echo -e "         ${DIM}Con un max_routing_fee mayor habria seguido probando rutas${NC}"
+                    echo -e "         ${DIM}mas caras. No es la causa de los fallos, pero acota la busqueda.${NC}"
+                fi
+            else
+                echo -e "    Comision:  ${fee_max} sats en la ruta mas cara intentada"
+            fi
+        fi
+    fi
+
+    if [[ "$n_vuelo" -gt 0 ]]; then
+        echo -e "      ${YELLOW}⚠${NC}  Hay un HTLC sin resolver: LND no cerrara el pago"
+        echo -e "         ${DIM}ni Mostro podra reintentar hasta que se libere.${NC}"
+    fi
+    echo ""
+}
+
+# Pinta la hold invoice del vendedor. Su estado es el que dice si el escrow está
+# bloqueado (ACCEPTED), ya liberado (SETTLED) o devuelto (CANCELED), y eso no se deduce
+# del estado de la orden: una orden en 'settled-hold-invoice' con la factura todavía en
+# ACCEPTED significa que Mostro aún no ha cobrado.
+lnd_mostrar_invoice() {
+    local h="$1" json estado valor pagado aceptada resuelta estado_txt
+    [[ ${#h} -eq 64 ]] || return 1
+    json=$(lncli lookupinvoice "$h" 2>/dev/null) || return 1
+    [[ -z "$json" ]] && return 1
+
+    estado=$(jq -r '.state // "?"' <<<"$json")
+    valor=$(jq -r '.value // "0"' <<<"$json")
+    pagado=$(jq -r '.amt_paid_sat // "0"' <<<"$json")
+
+    case "$estado" in
+        SETTLED)  estado_txt="${GREEN}✅ SETTLED${NC} ${DIM}(cobrada por Mostro)${NC}" ;;
+        ACCEPTED) estado_txt="${YELLOW}🔒 ACCEPTED${NC} ${DIM}(fondos bloqueados, sin cobrar)${NC}" ;;
+        CANCELED) estado_txt="${RED}❌ CANCELED${NC} ${DIM}(devuelta al vendedor)${NC}" ;;
+        OPEN)     estado_txt="${CYAN}⏳ OPEN${NC} ${DIM}(emitida, aun sin pagar)${NC}" ;;
+        *)        estado_txt="$estado" ;;
+    esac
+
+    echo -e "  ${BOLD}Hold invoice (escrow del vendedor)${NC}"
+    echo -e "    Importe:   $(format_sats "$valor")"
+    echo -e "    Estado:    $estado_txt"
+    # amt_paid_sat sigue relleno después de cancelar la factura, así que llamarlo
+    # "cobrado" sin más daría a entender que Mostro se quedó unos fondos que devolvió.
+    if [[ "$pagado" != "0" ]]; then
+        case "$estado" in
+            SETTLED)  echo -e "    Cobrado:   $(format_sats "$pagado")" ;;
+            ACCEPTED) echo -e "    Bloqueado: $(format_sats "$pagado")" ;;
+            CANCELED) echo -e "    Devuelto:  $(format_sats "$pagado") ${DIM}al vendedor${NC}" ;;
+            *)        echo -e "    Pagado:    $(format_sats "$pagado")" ;;
+        esac
+    fi
+
+    # accept_time del primer HTLC es cuando el vendedor bloqueó de verdad los fondos.
+    aceptada=$(jq -r '[.htlcs[]?.accept_time // empty] | min // empty' <<<"$json")
+    resuelta=$(jq -r '.settle_date // empty' <<<"$json")
+    [[ -n "$aceptada" && "$aceptada" != "0" ]] && echo -e "    Bloqueada: $(format_timestamp "$aceptada")"
+    [[ -n "$resuelta" && "$resuelta" != "0" ]] && echo -e "    Liquidada: $(format_timestamp "$resuelta")"
+    echo ""
+}
+
 # --- Modos especiales ---
 
 # --stats
@@ -488,6 +677,80 @@ while IFS='|' read -r uuid kind status event_id hash preimage \
             echo -e "  Fallidos:    ${RED}$failed_payment${NC}"
         fi
         echo ""
+    fi
+
+    # --- Lightning en vivo (LND) ---
+    if [[ (-n "$hash" && "$hash" != "") || (-n "$buyer_invoice" && "$buyer_invoice" != "") ]] \
+       && lnd_disponible; then
+
+        # Límites que decide Mostro, no LND: sin ellos no se sabe si un fallo es de la red
+        # o de la configuración propia. Se leen solo estas dos claves — settings.toml
+        # contiene la nsec de la instancia y no debe volcarse entero.
+        pct_fee=$(grep -oP '^\s*max_routing_fee\s*=\s*\K[0-9.]+' "$MOSTROD_CONFIG" 2>/dev/null)
+        # El presupuesto de reintentos del pago al comprador es [lightning] payment_attempts.
+        # payout_max_retries existe, pero gobierna el cobro de las fianzas (app/bond/payout.rs),
+        # que es otro camino distinto.
+        max_retries=$(grep -oP '^\s*payment_attempts\s*=\s*\K[0-9]+' "$MOSTROD_CONFIG" 2>/dev/null)
+
+        echo -e "${BOLD}  ─── Lightning en vivo (LND) ───${NC}"
+        echo ""
+
+        [[ -n "$hash" && "$hash" != "" ]] && lnd_mostrar_invoice "$hash"
+
+        # El hash que guarda la orden es el de la hold invoice, no el del pago de salida.
+        # El pago al comprador solo se localiza decodificando su factura.
+        if [[ -n "$buyer_invoice" && "$buyer_invoice" != "" ]]; then
+            pay_json=$(lncli decodepayreq --pay_req "$buyer_invoice" 2>/dev/null)
+            if [[ -n "$pay_json" ]]; then
+                pay_hash=$(jq -r '.payment_hash // ""' <<<"$pay_json")
+                pay_dest=$(jq -r '.destination // ""' <<<"$pay_json")
+                pay_monto=$(jq -r '.num_satoshis // "0"' <<<"$pay_json")
+
+                # Reproduce routing_fee_cap_sats() de src/lightning/mod.rs: por debajo de
+                # 1000 sats el techo no es el porcentaje sino el 1% con suelo de 10 sats,
+                # porque si no un pago de 30 sats saldría con un límite de cero.
+                techo_fee=""
+                if [[ -n "$pct_fee" && "$pay_monto" != "0" ]]; then
+                    techo_fee=$(awk -v a="$pay_monto" -v p="$pct_fee" \
+                        'BEGIN{ f = (a <= 1000) ? ((a*0.01 > 10) ? a*0.01 : 10) : a*p; printf "%d", f }')
+                fi
+
+                pago_json=$(lnd_pago "$pay_hash")
+                if [[ -n "$pago_json" ]]; then
+                    # Un destino ausente del grafo es un nodo privado —monedero móvil— al
+                    # que solo se llega por pistas de ruta. Explica buena parte de los
+                    # fallos de liquidez, así que solo se consulta si el pago no ha salido.
+                    linea_dest=""
+                    linea_ret=""
+                    if [[ "$(jq -r '.status' <<<"$pago_json")" != "SUCCEEDED" && -n "$pay_dest" ]]; then
+                        alias_dest=$(lncli getnodeinfo "$pay_dest" 2>/dev/null | jq -r '.node.alias // ""')
+                        if [[ -n "$alias_dest" ]]; then
+                            linea_dest="    Destino:   ${pay_dest:0:16}... ${DIM}($alias_dest)${NC}"
+                        else
+                            linea_dest="    Destino:   ${pay_dest:0:16}... ${YELLOW}no anunciado en el grafo${NC}\n"
+                            linea_dest+="      ${DIM}Nodo privado: se alcanza solo por pistas de ruta,"
+                            linea_dest+=" y su liquidez entrante suele ser el limite real.${NC}"
+                        fi
+                        [[ -n "$max_retries" ]] && \
+                            linea_ret="    Reintento: ${payment_attempts:-0} de $max_retries ${DIM}(lightning.payment_attempts)${NC}"
+                    fi
+                    lnd_mostrar_pago "Pago al comprador" "$pago_json" "$techo_fee" \
+                        "$linea_dest" "$linea_ret"
+                else
+                    echo -e "  ${BOLD}Pago al comprador${NC}"
+                    echo -e "    Importe:   $(format_sats "$pay_monto")"
+                    echo -e "    Estado:    ${DIM}LND no ha iniciado ningun pago con este hash${NC}"
+                    echo ""
+                fi
+            fi
+        fi
+
+        # La dev fee va por su propio pago y falla por su cuenta: es diminuta, y con un
+        # min_htlc alto en los canales se queda sin ruta mientras todo lo demás funciona.
+        if [[ -n "$dev_fee_payment_hash" && "$dev_fee_payment_hash" != "" ]]; then
+            dev_json=$(lnd_pago "$dev_fee_payment_hash")
+            [[ -n "$dev_json" ]] && lnd_mostrar_pago "Dev fee" "$dev_json" ""
+        fi
     fi
 
     # --- Disputas y cancelaciones ---
