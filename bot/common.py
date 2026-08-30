@@ -11,15 +11,21 @@ import os
 import sys
 import time
 import websocket
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.entorno import cargar_env
-from lib.formato import formato_sats
+from lib.formato import fecha_larga, formato_sats
 
 cargar_env()
+
+# Hora peninsular española: los mensajes quedan fijos en el canal y los lee gente de aquí.
+# ZoneInfo aplica el cambio invierno/verano solo, así que la etiqueta sale CET o CEST según
+# la fecha de la oferta, no según cuándo se mire.
+ZONA = ZoneInfo("Europe/Madrid")
 
 MOSTRO_PUBKEY = os.getenv("MOSTRO_PUBKEY")
 RELAY = os.getenv("MOSTRO_RELAY")
@@ -110,24 +116,18 @@ def formato_texto(oferta, html=False):
     except ValueError:
         premium_txt = f"📊 {b('Premium:')}  {premium}%"
 
+    # En una oferta a precio flotante (amt=0) esta línea decía "A precio de mercado", lo
+    # mismo que el premium justo debajo. Se omite: el bloque de premium ya lo dice.
     sats = oferta["monto_sats"]
-    if sats != "0":
-        sats_txt = f"⚡ {b('Sats:')}  {formato_sats(sats)} sats"
-    else:
-        sats_txt = f"⚡ {b('Sats:')}  A precio de mercado"
+    sats_txt = f"⚡ {b('Sats:')}  {formato_sats(sats)} sats" if sats != "0" else ""
 
+    # Fecha y hora de la publicación, no un "hace N min": el mensaje se queda fijo en el
+    # canal y el tiempo relativo, calculado una sola vez al publicar, envejece mintiendo.
     tiempo = ""
     if oferta["created_at"]:
         try:
-            creado = datetime.fromtimestamp(oferta["created_at"], tz=timezone.utc)
-            ahora = datetime.now(timezone.utc)
-            minutos = int((ahora - creado).total_seconds() / 60)
-            if minutos < 1:
-                tiempo = "Hace un momento"
-            elif minutos < 60:
-                tiempo = f"Hace {minutos} min"
-            else:
-                tiempo = f"Hace {minutos // 60}h {minutos % 60}min"
+            creado = datetime.fromtimestamp(oferta["created_at"], tz=ZONA)
+            tiempo = f"{fecha_larga(creado)}, {creado.strftime('%H:%M %Z')}"
         except Exception:
             pass
 
@@ -143,10 +143,13 @@ def formato_texto(oferta, html=False):
         desc,
         "",
         f"💰 {b('Fiat:')}  {oferta['monto_fiat']} {oferta['fiat']}",
-        sats_txt,
-        premium_txt,
-        f"🏦 {b('Método:')}  {oferta['metodos']}",
     ]
+
+    if sats_txt:
+        lineas.append(sats_txt)
+
+    lineas.append(premium_txt)
+    lineas.append(f"🏦 {b('Método:')}  {oferta['metodos']}")
 
     if oferta["bond"]:
         lineas.append(f"🔒 {b('Fianza:')}  {oferta['bond']}%")
