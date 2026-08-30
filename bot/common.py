@@ -179,7 +179,17 @@ def obtener_pending(timeout=15, max_eventos=2000):
     ws = None
     try:
         ws = websocket.create_connection(RELAY, timeout=timeout)
-        ws.send(json.dumps(["REQ", "scan", {"kinds": [38383], "authors": [MOSTRO_PUBKEY]}]))
+        # El filtro #s=pending no es un lujo: sin él el relay devuelve el histórico entero y
+        # lo corta en su límite por defecto (300 eventos), casi todos ya canceled o success,
+        # dejando fuera ofertas vivas. Reconciliar con esa lista truncada borraba del canal
+        # ofertas que seguían abiertas. El limit explícito evita depender del que traiga el
+        # relay de turno.
+        ws.send(json.dumps(["REQ", "scan", {
+            "kinds": [38383],
+            "authors": [MOSTRO_PUBKEY],
+            "#s": ["pending"],
+            "limit": 1000,
+        }]))
 
         pending = {}
         for _ in range(max_eventos):
