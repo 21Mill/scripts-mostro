@@ -159,7 +159,7 @@ def formato_texto(oferta, html=False):
 
     lineas.append(f"\n{code(oferta['order_id'])}")
     lineas.append("━━━━━━━━━━━━━━━━━━━━━")
-    lineas.append(f"🧌 {b('Mostro P2P')} — Exchange sin KYC vía ⚡")
+    lineas.append(f"🧌 {b('NostroMostro')} — Instancia española de Mostro 🇪🇸")
 
     return "\n".join(lineas)
 
