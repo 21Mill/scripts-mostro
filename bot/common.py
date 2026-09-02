@@ -6,6 +6,7 @@ una oferta. El envío por Telegram, el formateo de cifras, la persistencia en JS
 carga del .env viven en lib/, porque los usan también scripts que no tocan ningún relay.
 """
 
+import html as html_mod
 import json
 import os
 import sys
@@ -84,6 +85,13 @@ def formato_texto(oferta, html=False):
     tipo = oferta["tipo"]
     b = lambda t: f"<b>{t}</b>" if html else t
     i = lambda t: f"<i>{t}</i>" if html else t
+    # Todo lo que viene del evento pasa por aquí antes de entrar en el HTML de Telegram: un
+    # vendedor puso un '<' en el método de pago y la API rechazó el mensaje entero
+    # ("can't parse entities"), así que la oferta no llegó a publicarse. En texto plano
+    # (Nostr) escapar convertiría ese mismo '<' en '&lt;' a la vista del lector.
+    # str() porque formato_sats() devuelve el valor tal cual si no es un número, y
+    # html.escape() reventaría con un None dentro de un mensaje ya casi enviado.
+    esc = (lambda t: html_mod.escape(str(t))) if html else (lambda t: t)
 
     if tipo == "BUY":
         accion = "COMPRA"
@@ -98,9 +106,9 @@ def formato_texto(oferta, html=False):
     try:
         p = float(premium)
         if p > 0:
-            premium_txt = f"📈 {b('Premium:')}  +{premium}%"
+            premium_txt = f"📈 {b('Premium:')}  +{esc(premium)}%"
         elif p < 0:
-            premium_txt = f"📉 {b('Descuento:')}  {premium}%"
+            premium_txt = f"📉 {b('Descuento:')}  {esc(premium)}%"
         else:
             sats_fijos = oferta["monto_sats"]
             fiat_fijo = oferta["monto_fiat"]
@@ -108,18 +116,18 @@ def formato_texto(oferta, html=False):
                 try:
                     precio_btc = (float(fiat_fijo) / int(sats_fijos)) * 100_000_000
                     precio_fmt = f"{int(round(precio_btc)):,}".replace(",", ".")
-                    premium_txt = f"💲 {b('Precio BTC:')}  {precio_fmt} {oferta['fiat']}"
+                    premium_txt = f"💲 {b('Precio BTC:')}  {precio_fmt} {esc(oferta['fiat'])}"
                 except (ValueError, ZeroDivisionError):
                     premium_txt = f"📊 {b('Premium:')}  Precio de mercado"
             else:
                 premium_txt = f"📊 {b('Premium:')}  Precio de mercado"
     except ValueError:
-        premium_txt = f"📊 {b('Premium:')}  {premium}%"
+        premium_txt = f"📊 {b('Premium:')}  {esc(premium)}%"
 
     # En una oferta a precio flotante (amt=0) esta línea decía "A precio de mercado", lo
     # mismo que el premium justo debajo. Se omite: el bloque de premium ya lo dice.
     sats = oferta["monto_sats"]
-    sats_txt = f"⚡ {b('Sats:')}  {formato_sats(sats)} sats" if sats != "0" else ""
+    sats_txt = f"⚡ {b('Sats:')}  {esc(formato_sats(sats))} sats" if sats != "0" else ""
 
     # Fecha y hora de la publicación, no un "hace N min": el mensaje se queda fijo en el
     # canal y el tiempo relativo, calculado una sola vez al publicar, envejece mintiendo.
@@ -142,22 +150,22 @@ def formato_texto(oferta, html=False):
         "",
         desc,
         "",
-        f"💰 {b('Fiat:')}  {oferta['monto_fiat']} {oferta['fiat']}",
+        f"💰 {b('Fiat:')}  {esc(oferta['monto_fiat'])} {esc(oferta['fiat'])}",
     ]
 
     if sats_txt:
         lineas.append(sats_txt)
 
     lineas.append(premium_txt)
-    lineas.append(f"🏦 {b('Método:')}  {oferta['metodos']}")
+    lineas.append(f"🏦 {b('Método:')}  {esc(oferta['metodos'])}")
 
     if oferta["bond"]:
-        lineas.append(f"🔒 {b('Fianza:')}  {oferta['bond']}%")
+        lineas.append(f"🔒 {b('Fianza:')}  {esc(oferta['bond'])}%")
 
     if tiempo:
         lineas.append(f"\n🕐 {i(tiempo)}")
 
-    lineas.append(f"\n{code(oferta['order_id'])}")
+    lineas.append(f"\n{code(esc(oferta['order_id']))}")
     lineas.append("━━━━━━━━━━━━━━━━━━━━━")
     lineas.append(f"🧌 {b('NostroMostro')} — Instancia española de Mostro 🇪🇸")
 
