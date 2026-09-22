@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from common import (
-    MOSTRO_PUBKEY, RELAY,
+    MOSTRO_PUBKEY, RELAYS,
     parsear_oferta, formato_texto, conectar_relay,
     obtener_pending, reconciliar
 )
@@ -56,13 +56,13 @@ def scan_inicial(solo_simular=False):
     en directo es indetectable por definición.
     """
     global ordenes_publicadas
-    print("🔍 Reconciliando con el relay...")
+    print(f"🔍 Reconciliando con {len(RELAYS)} relays...")
 
     pending = obtener_pending()
     a_retirar, a_publicar = reconciliar(ordenes_publicadas, pending)
 
     if pending is None:
-        print("⚠️ El relay no ha contestado: no se reconcilia (no se borra nada por si acaso)")
+        print("⚠️ Ningún relay ha contestado: no se reconcilia (no se borra nada por si acaso)")
         return
 
     if solo_simular:

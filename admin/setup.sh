@@ -165,7 +165,7 @@ ask TELEGRAM_TOKEN       "Token del bot de Telegram"       "${TELEGRAM_TOKEN:-}"
 ask TELEGRAM_CHAT_ID     "Chat ID para ofertas"            "${TELEGRAM_CHAT_ID:-}"
 ask TELEGRAM_TEST_CHAT_ID "Chat ID para test (vacío = mismo que ofertas)" "${TELEGRAM_TEST_CHAT_ID:-$TELEGRAM_CHAT_ID}"
 ask MOSTRO_PUBKEY        "Clave pública de tu Mostro"      "${MOSTRO_PUBKEY:-}"
-ask MOSTRO_RELAY         "URL del relay Nostr"             "${MOSTRO_RELAY:-wss://relay.mostro.network}"
+ask MOSTRO_RELAY         "Relays de Mostro (separados por comas)" "${MOSTRO_RELAY:-wss://relay.mostro.network,wss://relay.kilombino.com,wss://mostro-p2p.tech}"
 
 # --- Test de Telegram ---
 if [ -n "$TELEGRAM_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then

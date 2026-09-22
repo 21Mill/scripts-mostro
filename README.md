@@ -56,7 +56,7 @@ Los valores comentados en `.env.example` muestran los defaults. Solo necesitas d
 | `TELEGRAM_STATS_CHAT_ID` | — | Destino de los informes. **Sin respaldo: vacío = no se envía** |
 | `TELEGRAM_STATS_CONFIG` | — | `config.toml` del que tomar `bot_token` y `chat_id`; tiene prioridad |
 | `MOSTRO_PUBKEY` | — | Clave pública del nodo Mostro |
-| `MOSTRO_RELAY` | `wss://relay.mostro.network` | URL del relay Nostr |
+| `MOSTRO_RELAY` | `wss://relay.mostro.network,wss://relay.kilombino.com,wss://mostro-p2p.tech` | Relays donde leer las ofertas de Mostro, separados por comas (basta con que conteste uno) |
 | `NOSTR_BOT_NSEC` | *(se genera automáticamente)* | Clave privada del bot de Nostr |
 | `NOSTR_BOT_RELAYS` | `wss://relay.damus.io,wss://nos.lol,wss://relay.mostro.network` | Relays donde publicar ofertas |
 | `NOSTROMOSTRO_WEB_REPO` | `~/nostromostro.github.io` | Repo de GitHub Pages para `premiums.json` |
