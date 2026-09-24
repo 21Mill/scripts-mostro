@@ -191,11 +191,16 @@ Busca por **master pubkey** (`master_buyer_pubkey` / `master_seller_pubkey`), qu
 
 El papel de maker o taker se deduce comparando `creator_pubkey` con la clave efímera de cada lado, porque `creator_pubkey` nunca es la master.
 
+Cuando una orden tuvo disputa, la columna **DISPUTA** dice cómo se resolvió, porque el estado de la orden no lo distingue: `canceled-by-admin` sale igual tanto si ganó el vendedor (`seller-refunded`, sats devueltos) como si ganó el comprador (`settled`, sats entregados). Esa información vive en `disputes.status`. Al final se añade un recuento de disputas por resolución.
+
 ```bash
-./tools/user.sh <pubkey>          # Historial completo, reputación y totales
-./tools/user.sh d91a8edb          # Por prefijo (avisa si es ambiguo)
-./tools/user.sh <pubkey> --json   # Salida JSON para encadenar con otros scripts
-./tools/user.sh --top             # Usuarios con más órdenes
+./tools/user.sh <pubkey>                    # Historial completo, reputación, disputas y totales
+./tools/user.sh d91a8edb                    # Por prefijo (avisa si es ambiguo)
+./tools/user.sh <pubkey> --status success   # Solo un estado
+./tools/user.sh <pubkey> --status dispute,canceled   # Varios
+./tools/user.sh <pubkey> --status 'canceled*'        # Incluye canceled-by-admin
+./tools/user.sh <pubkey> --json             # Salida JSON para encadenar con otros scripts
+./tools/user.sh --top                       # Usuarios con más órdenes
 ```
 
 ### tools/report.sh

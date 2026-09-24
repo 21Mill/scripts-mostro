@@ -12,11 +12,14 @@ source "$SCRIPT_DIR/../admin/env.sh"
 
 # --- Uso ---
 if [[ -z "$1" ]]; then
-    echo -e "${CYAN}Uso:${NC} $(basename "$0") <pubkey> [--json]"
+    echo -e "${CYAN}Uso:${NC} $(basename "$0") <pubkey> [--status <estados>] [--json]"
     echo -e "  Historial de ordenes de un usuario (hex de 64 caracteres o npub)."
     echo ""
     echo -e "${CYAN}Ejemplos:${NC}"
     echo "  $(basename "$0") d91a8edba5c6526d7591e405cbb8fc8f931f3234afb98c8a8206fd1e47a4ee99"
+    echo "  $(basename "$0") d91a8edb --status success          (solo completadas)"
+    echo "  $(basename "$0") d91a8edb --status dispute,canceled (varios estados)"
+    echo "  $(basename "$0") d91a8edb --status canceled*        (y canceled-by-admin)"
     echo "  $(basename "$0") d91a8edb --json     (salida JSON para otros scripts)"
     echo "  $(basename "$0") --top              (usuarios con mas ordenes)"
     exit 1
@@ -70,9 +73,29 @@ if [[ "$1" == "--top" ]]; then
     exit 0
 fi
 
-PUBKEY="$1"
+PUBKEY=""
 JSON=0
-[[ "$2" == "--json" ]] && JSON=1
+STATUS_FILTER=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --json)   JSON=1; shift ;;
+        --status) STATUS_FILTER="$2"; shift 2 ;;
+        --status=*) STATUS_FILTER="${1#--status=}"; shift ;;
+        -*)       echo -e "${RED}Error:${NC} opcion desconocida $1"; exit 1 ;;
+        *)        PUBKEY="$1"; shift ;;
+    esac
+done
+
+if [[ -z "$PUBKEY" ]]; then
+    echo -e "${RED}Error:${NC} falta la clave publica"
+    exit 1
+fi
+
+if [[ -n "$STATUS_FILTER" && -z "${STATUS_FILTER//[[:space:]]/}" ]]; then
+    echo -e "${RED}Error:${NC} --status necesita al menos un estado"
+    exit 1
+fi
 
 # npub -> hex, si hace falta y hay con que convertir
 if [[ "$PUBKEY" == npub1* ]]; then
@@ -115,18 +138,50 @@ if [[ -n "$master" ]]; then
     PUBKEY="$master"
 fi
 
-WHERE="master_buyer_pubkey='$PUBKEY' OR master_seller_pubkey='$PUBKEY'"
+WHERE="(master_buyer_pubkey='$PUBKEY' OR master_seller_pubkey='$PUBKEY')"
+
+# --status: lista separada por comas. Un '*' final pasa a LIKE, para que
+# "canceled*" recoja tambien canceled-by-admin y cooperatively-canceled no.
+if [[ -n "$STATUS_FILTER" ]]; then
+    cond=""
+    IFS=',' read -ra estados <<< "$STATUS_FILTER"
+    for e in "${estados[@]}"; do
+        e="${e//[[:space:]]/}"
+        [[ -z "$e" ]] && continue
+        e="${e//\'/}"
+        [[ -n "$cond" ]] && cond="$cond OR "
+        if [[ "$e" == *\* ]]; then
+            cond="${cond}status LIKE '${e%\*}%'"
+        else
+            cond="${cond}status='$e'"
+        fi
+    done
+    WHERE="$WHERE AND ($cond)"
+
+    # Un filtro que no casa con nada suele ser un estado mal escrito: mejor
+    # decir cuales existen que devolver una tabla vacia sin explicacion.
+    if [[ "$(sql_ro "$DB_PATH" "SELECT COUNT(*) FROM orders WHERE $WHERE")" == "0" ]]; then
+        echo -e "${YELLOW}Sin ordenes${NC} con estado '$STATUS_FILTER' para este usuario."
+        echo -e "  ${DIM}Estados presentes en sus ordenes:${NC}"
+        sql_ro "$DB_PATH" "SELECT DISTINCT status FROM orders
+            WHERE master_buyer_pubkey='$PUBKEY' OR master_seller_pubkey='$PUBKEY' ORDER BY 1" | sed 's/^/    /'
+        exit 1
+    fi
+fi
 # Rol y lado: el creador se identifica comparando creator_pubkey con la clave
 # efimera de cada lado, porque creator_pubkey nunca es la master.
+# Los alias importan: con --json son las claves del objeto, y sin ellos la del
+# UUID sale siendo la expresion SQL entera.
 SELECT_ORDERS="
-    SELECT $UUID_SQL,
+    SELECT $UUID_SQL AS order_id,
            status, kind,
-           CASE WHEN master_buyer_pubkey='$PUBKEY' THEN 'comprador' ELSE 'vendedor' END,
+           CASE WHEN master_buyer_pubkey='$PUBKEY' THEN 'comprador' ELSE 'vendedor' END AS rol,
            CASE WHEN (master_buyer_pubkey='$PUBKEY' AND creator_pubkey=buyer_pubkey)
                   OR (master_seller_pubkey='$PUBKEY' AND creator_pubkey=seller_pubkey)
-                THEN 'maker' ELSE 'taker' END,
-           fiat_code, fiat_amount, min_amount, max_amount, amount, premium,
-           created_at, taken_at
+                THEN 'maker' ELSE 'taker' END AS lado,
+           fiat_code, fiat_amount, min_amount, max_amount, amount AS sats, premium,
+           created_at, taken_at,
+           COALESCE((SELECT status FROM disputes d WHERE d.order_id = orders.id), '') AS disputa
     FROM orders WHERE $WHERE ORDER BY created_at DESC"
 
 if [[ "$JSON" -eq 1 ]]; then
@@ -141,6 +196,7 @@ if [[ "$total" == "0" ]]; then
 fi
 
 echo -e "${BOLD}${CYAN}═══ Usuario $PUBKEY ═══${NC}"
+[[ -n "$STATUS_FILTER" ]] && echo -e "${DIM}  filtro de estado: $STATUS_FILTER${NC}"
 echo ""
 
 # Reputacion (tabla users; puede no existir si nunca completo una operacion)
@@ -153,12 +209,12 @@ sql_ro "$DB_PATH" -separator '|' "
     echo ""
 done
 
-printf "  ${DIM}%-38s %-18s %-5s %-10s %-6s %10s %10s   %-16s${NC}\n" \
-    "ORDER ID" "STATUS" "TYPE" "ROL" "LADO" "FIAT" "SATS" "CREADA"
+printf "  ${DIM}%-38s %-18s %-5s %-10s %-6s %10s %10s   %-16s  %s${NC}\n" \
+    "ORDER ID" "STATUS" "TYPE" "ROL" "LADO" "FIAT" "SATS" "CREADA" "DISPUTA"
 echo -e "  ${DIM}$(printf '─%.0s' {1..118})${NC}"
 
 sql_ro "$DB_PATH" -separator '|' "$SELECT_ORDERS" |
-while IFS='|' read -r uuid status kind rol lado fiat_code fiat_amount min_amount max_amount amount premium created_at taken_at; do
+while IFS='|' read -r uuid status kind rol lado fiat_code fiat_amount min_amount max_amount amount premium created_at taken_at disputa; do
     case "$status" in
         success)    status_color="${GREEN}$status${NC}" ;;
         pending)    status_color="${YELLOW}$status${NC}" ;;
@@ -173,12 +229,41 @@ while IFS='|' read -r uuid status kind rol lado fiat_code fiat_amount min_amount
     else
         fiat_display="$fiat_amount"
     fi
-    printf "  %-38s %-31b %-5s %-10s %-6s %6s %-3s %10s   %-16s\n" \
+    # El estado de la orden no dice a favor de quien se resolvio una disputa:
+    # canceled-by-admin sale tanto si gano el vendedor como si gano el comprador.
+    # Eso vive en disputes.status, asi que se muestra al lado.
+    case "$disputa" in
+        seller-refunded) disputa_txt="${RED}⚖ sats al vendedor${NC}" ;;
+        settled)         disputa_txt="${GREEN}⚖ sats al comprador${NC}" ;;
+        in-progress)     disputa_txt="${YELLOW}⚖ sin resolver${NC}" ;;
+        "")              disputa_txt="" ;;
+        *)               disputa_txt="${CYAN}⚖ $disputa${NC}" ;;
+    esac
+    printf "  %-38s %-31b %-5s %-10s %-6s %6s %-3s %10s   %-16s  %b\n" \
         "$uuid" "$status_color" "$kind" "$rol" "$lado" \
-        "$fiat_display" "$fiat_code" "$(format_sats "$amount")" "$(format_timestamp "$created_at")"
+        "$fiat_display" "$fiat_code" "$(format_sats "$amount")" "$(format_timestamp "$created_at")" "$disputa_txt"
 done
 
 echo ""
+
+# Recuento de disputas: util para juzgar a una contraparte de un vistazo.
+disputas=$(sql_ro "$DB_PATH" -separator '|' "
+    SELECT d.status, COUNT(*) FROM disputes d JOIN orders o ON o.id = d.order_id
+    WHERE $WHERE GROUP BY d.status ORDER BY COUNT(*) DESC")
+if [[ -n "$disputas" ]]; then
+    echo -e "  ${BOLD}Disputas${NC}"
+    while IFS='|' read -r dstatus n; do
+        case "$dstatus" in
+            seller-refunded) txt="resueltas a favor del vendedor" ;;
+            settled)         txt="resueltas a favor del comprador" ;;
+            in-progress)     txt="abiertas, sin resolver" ;;
+            *)               txt="$dstatus" ;;
+        esac
+        printf "    %3s %s\n" "$n" "$txt"
+    done <<< "$disputas"
+    echo ""
+fi
+
 echo -e "  ${BOLD}Totales${NC}"
 sql_ro "$DB_PATH" -separator '|' "
     SELECT status, COUNT(*), SUM(amount), SUM(fiat_amount)
