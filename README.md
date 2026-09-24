@@ -183,6 +183,21 @@ El bloque se omite sin ruido si `lncli` no está disponible. Cuesta ~1 s con la 
 
 Periodos disponibles para `--stats`: `today`/`hoy`, `24h`, `7d`/`week`/`semana`, `30d`/`month`/`mes`, `90d`/`trimestre`, `year`/`año`, `YYYY-MM-DD` (desde fecha), `YYYY-MM-DD..YYYY-MM-DD` (rango).
 
+### tools/user.sh
+
+Historial de órdenes de un usuario a partir de su clave pública, con su reputación y los totales por estado.
+
+Busca por **master pubkey** (`master_buyer_pubkey` / `master_seller_pubkey`), que es lo que identifica a una persona entre operaciones: `buyer_pubkey` y `seller_pubkey` son claves efímeras, distintas en cada orden. Si le pasas una efímera, la resuelve a su master y avisa.
+
+El papel de maker o taker se deduce comparando `creator_pubkey` con la clave efímera de cada lado, porque `creator_pubkey` nunca es la master.
+
+```bash
+./tools/user.sh <pubkey>          # Historial completo, reputación y totales
+./tools/user.sh d91a8edb          # Por prefijo (avisa si es ambiguo)
+./tools/user.sh <pubkey> --json   # Salida JSON para encadenar con otros scripts
+./tools/user.sh --top             # Usuarios con más órdenes
+```
+
 ### tools/report.sh
 
 Genera un informe financiero de la actividad del nodo: volumen de trading, flujo de sats, ingresos, disputas y tendencia diaria con gráfico ASCII.
