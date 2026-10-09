@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# order.sh — Consulta todos los datos de una orden en la base de datos de Mostro.
+# order.sh — Consulta todos los datos de una orden en la base de datos de Mostro,
+# y reconstruye su historia desde el log de mostrod.
+#
+# La base guarda el estado final; el log guarda como se llego a el. Sin lo
+# segundo no se puede responder a lo que pregunta la gente cuando escribe:
+# por que se cancelo, cuantas facturas llego a mandar y que paso con cada una.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../admin/env.sh"
@@ -301,6 +306,211 @@ lnd_mostrar_invoice() {
     resuelta=$(jq -r '.settle_date // empty' <<<"$json")
     [[ -n "$aceptada" && "$aceptada" != "0" ]] && echo -e "    Bloqueada: $(format_timestamp "$aceptada")"
     [[ -n "$resuelta" && "$resuelta" != "0" ]] && echo -e "    Liquidada: $(format_timestamp "$resuelta")"
+    echo ""
+}
+
+# --- Historial desde el log de mostrod ---
+#
+# La base guarda el estado final, no como se llego a el. Una orden cancelada no
+# dice por que, `buyer_invoice` solo conserva la ultima factura porque el campo
+# se sobrescribe en cada intento, y los rechazos de factura no dejan rastro
+# ninguno en la base. Todo eso si esta en el log, y es justo lo que hace falta
+# cuando alguien pregunta que le ha pasado a su orden.
+
+log_disponible() {
+    [[ -n "$MOSTRO_LOG" && -r "$MOSTRO_LOG" ]]
+}
+
+# Lineas de una orden, sin los codigos de color que escribe mostrod.
+orden_log() {
+    grep -F "$1" "$MOSTRO_LOG" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
+}
+
+# "2026-10-09T11:01:16.123456Z ..." -> "11:01:16"
+log_hora() {
+    echo "$1" | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}' \
+        | cut -dT -f2
+}
+
+log_fecha() {
+    echo "$1" | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+}
+
+# Traduce los motivos que escribe mostrod. Si no conoce uno lo devuelve tal
+# cual: perder informacion por no tener la traduccion seria peor.
+traducir_motivo() {
+    local m="$1"
+    case "$m" in
+        *"maker (buyer) did not send their invoice in time"*)
+            echo "El creador (comprador) no envio su factura a tiempo" ;;
+        *"maker (seller) did not pay the hold invoice in time"*)
+            echo "El creador (vendedor) no pago el escrow a tiempo" ;;
+        *"taker (seller) did not pay the hold invoice in time"*)
+            echo "El tomador (vendedor) no pago el escrow a tiempo" ;;
+        *"buyer did not send their invoice in time"*)
+            echo "El comprador no envio su factura a tiempo" ;;
+        *"seller did not pay it in time"*)
+            echo "El vendedor no pago el escrow a tiempo" ;;
+        *) echo "$m" ;;
+    esac
+}
+
+# Los codigos de cant-do, que es lo que de verdad explica un rechazo.
+traducir_cant_do() {
+    case "$1" in
+        invalid_invoice)      echo "factura no valida (importe, caducidad o red)" ;;
+        invalid_trade_index)  echo "indice de trade desincronizado en el cliente" ;;
+        not_allowed_by_status) echo "accion no permitida en el estado actual" ;;
+        out_of_range_sats_amount) echo "importe fuera del rango de la orden" ;;
+        "")                   echo "?" ;;
+        *)                    echo "$1" ;;
+    esac
+}
+
+# Facturas que llego a poner el comprador, que es la pregunta mas frecuente
+# cuando un pago no sale. Dos grupos distintos y conviene no mezclarlos:
+#
+#   aceptadas  Mostro las dio por validas e intento pagarlas. Cada una deja un
+#              payment_hash propio en las lineas de app::release. El hash de la
+#              hold invoice del vendedor vive en ::flow y no es suya.
+#   rechazadas Ni siquiera pasaron la validacion (importe, caducidad, red...).
+#              Solo dejan un cant-do; la factura en si no se guarda en ningun
+#              sitio, asi que esto es el unico rastro que queda.
+mostrar_facturas_comprador() {
+    local lineas="$1"
+    local hashes num_acept num_rech
+
+    hashes=$(echo "$lineas" | grep 'app::release' | grep -oE '[0-9a-f]{64}' | sort -u)
+    num_acept=$(echo "$hashes" | grep -c '[0-9a-f]')
+    # Solo invalid_invoice: los demas cant-do (invalid_trade_index y compania)
+    # son terceros fallando al tomar la orden, no facturas de este comprador.
+    # Se listan aparte en mostrar_otros_rechazos.
+    num_rech=$(echo "$lineas" | grep -c 'invalid_invoice')
+
+    [[ "$num_acept" -eq 0 && "$num_rech" -eq 0 ]] && return
+
+    echo -e "${BOLD}  ─── Facturas del comprador ───${NC}"
+    echo -e "  Total:       ${BOLD}$(( num_acept + num_rech ))${NC}" \
+            "(${GREEN}$num_acept aceptadas${NC}, ${RED}$num_rech rechazadas${NC})"
+    echo ""
+
+    # Ordenadas por cuando las puso, no por su hash: lo que se lee aqui es una
+    # secuencia de intentos del usuario.
+    local h primera intentos ultimo estado
+    while IFS='|' read -r primera h; do
+        [[ -z "$h" ]] && continue
+        # Un intento es cada desenlace registrado: fallo limpio o HTLC colgado.
+        intentos=$(echo "$lineas" | grep -F "$h" | grep -cE 'has failed|keeping payout claim')
+        # Manda el ultimo evento de esa factura; los dos estados pueden
+        # alternarse y el primero que aparezca no es el desenlace.
+        ultimo=$(echo "$lineas" | grep -F "$h" | grep -E 'has failed|keeping payout claim' | tail -1)
+        if echo "$ultimo" | grep -q 'keeping payout claim'; then
+            estado="${YELLOW}HTLC colgado, sin resolver${NC}"
+        elif [[ -n "$ultimo" ]]; then
+            estado="${RED}fallida${NC}"
+        else
+            estado="${DIM}sin desenlace registrado${NC}"
+        fi
+        printf "  ${GREEN}✓${NC} %s  ${DIM}%s${NC}  %b ${DIM}(%s intentos)${NC}\n" \
+            "$(log_hora "$primera")" "${h:0:16}" "$estado" "$intentos"
+    done <<< "$(
+        while IFS= read -r h; do
+            [[ -z "$h" ]] && continue
+            echo "$(echo "$lineas" | grep -F "$h" | head -1)|$h"
+        done <<< "$hashes" | sort
+    )"
+
+    # Cada rechazo con su motivo: invalid_invoice, invalid_trade_index,
+    # not_allowed_by_status... El motivo es lo que dice si el problema es del
+    # usuario o de su cliente.
+    local l motivo
+    while IFS= read -r l; do
+        [[ -z "$l" ]] && continue
+        motivo=$(echo "$l" | grep -oE 'cant_do\\":\\"[a-z_]+' | sed 's/.*\\"//')
+        echo -e "  ${RED}✗${NC} $(log_hora "$l")  ${RED}rechazada${NC}: $(traducir_cant_do "$motivo") ${DIM}(${motivo:-?})${NC}"
+    done <<< "$(echo "$lineas" | grep 'invalid_invoice')"
+    echo ""
+}
+
+# Rechazos que no son del comprador: normalmente terceros que intentan tomar la
+# orden y no pueden. Explican por que una orden parece "bloqueada" en el libro
+# aunque este disponible.
+mostrar_otros_rechazos() {
+    local lineas="$1" otros
+    otros=$(echo "$lineas" | grep 'cant_do' | grep -v 'invalid_invoice')
+    [[ -z "$otros" ]] && return
+    echo -e "${BOLD}  ─── Otros rechazos (intentos de terceros) ───${NC}"
+    echo "$otros" | grep -oE 'cant_do\\":\\"[a-z_]+' | sed 's/.*\\"//' | sort | uniq -c \
+        | while read -r n codigo; do
+            echo -e "  ${n}x  $(traducir_cant_do "$codigo") ${DIM}($codigo)${NC}"
+        done
+    echo ""
+}
+
+# Hitos de la orden en orden cronologico, traducidos a algo legible. Se queda
+# con las lineas que cuentan algo y descarta el ruido de envio de mensajes.
+mostrar_cronologia() {
+    local lineas="$1"
+    local eventos=""
+
+    _ev() { # patron -> descripcion
+        local encontradas
+        encontradas=$(echo "$lineas" | grep -E "$1")
+        [[ -z "$encontradas" ]] && return
+        while IFS= read -r l; do
+            [[ -z "$l" ]] && continue
+            eventos+="$(log_hora "$l")|$2"$'\n'
+        done <<< "$encontradas"
+    }
+
+    _ev 'New order saved' 'Orden creada'
+    _ev 'Maker bond requested' 'Fianza del maker solicitada'
+    _ev 'Maker bond .* locked' 'Fianza del maker bloqueada → publicada'
+    _ev 'Bond requested.*role=taker' 'Fianza del taker solicitada'
+    _ev 'flow: Bond [0-9a-f-]+ locked for order' 'Fianza del taker bloqueada'
+    _ev 'Seller paid invoice with hash' 'El vendedor pago el escrow'
+    # Los intentos de pago no se repiten aqui: van uno a uno en la seccion de
+    # facturas, y listarlos otra vez solo hace ruido.
+    _ev 'Hold invoice canceled' 'Escrow cancelado por tiempo'
+    _ev 'Funds returned to seller' 'Fondos devueltos al vendedor'
+    _ev 'Republishing order' 'Orden republicada en el libro'
+    _ev 'Canceled order Id' 'Orden cancelada'
+    _ev 'Dev fee payment succeeded' 'Dev fee pagada'
+    _ev 'released for order' 'Fianza liberada'
+
+    # Los cambios de estado llevan el estado dentro de la propia linea.
+    local l st
+    while IFS= read -r l; do
+        [[ -z "$l" ]] && continue
+        st=$(echo "$l" | grep -oE 'new Status: [a-z-]+' | sed 's/new Status: //')
+        eventos+="$(log_hora "$l")|Estado → $st"$'\n'
+    done <<< "$(echo "$lineas" | grep 'new Status:')"
+
+    [[ -z "$eventos" ]] && return
+
+    echo -e "${BOLD}  ─── Cronologia ───${NC}"
+    echo -e "  ${DIM}$(log_fecha "$(echo "$lineas" | head -1)")${NC}"
+    # sort -u sobre la linea entera: quita repetidos exactos pero conserva dos
+    # eventos distintos del mismo segundo. El -s mantiene ese orden al ordenar.
+    echo "$eventos" | grep -v '^$' | sort -u | sort -s -t'|' -k1,1 \
+        | while IFS='|' read -r hora desc; do
+            printf "  %s  %s\n" "$hora" "$desc"
+        done
+    echo ""
+}
+
+# El log dice con todas las letras por que murio una orden. Es la respuesta a
+# "se me ha cancelado y no se por que", y no esta en la base de datos.
+mostrar_motivo_final() {
+    local lineas="$1"
+    local motivo
+    motivo=$(echo "$lineas" | grep -oE '(Canceled order Id [^,]+, .*|Funds returned to seller - .*|Hold invoice canceled - .*|Republishing order Id [^,]+, .*)' | tail -1)
+    [[ -z "$motivo" ]] && return
+    # Quitar el uuid, que ya esta en la cabecera.
+    motivo=$(echo "$motivo" | sed -E 's/(Canceled order Id|Republishing order Id) [0-9a-f-]+, //; s/Order Id [0-9a-f-]+: //')
+    echo -e "${BOLD}  ─── Motivo del desenlace ───${NC}"
+    echo -e "  ${YELLOW}$(traducir_motivo "$motivo")${NC}"
+    echo -e "  ${DIM}${motivo}${NC}"
     echo ""
 }
 
@@ -750,6 +960,19 @@ while IFS='|' read -r uuid kind status event_id hash preimage \
         if [[ -n "$dev_fee_payment_hash" && "$dev_fee_payment_hash" != "" ]]; then
             dev_json=$(lnd_pago "$dev_fee_payment_hash")
             [[ -n "$dev_json" ]] && lnd_mostrar_pago "Dev fee" "$dev_json" ""
+        fi
+    fi
+
+    # --- Historial (log de mostrod) ---
+    # Va antes de disputas porque responde a la pregunta con la que suele
+    # llegar la gente: que ha pasado con mi orden.
+    if log_disponible; then
+        order_lines=$(orden_log "$uuid")
+        if [[ -n "$order_lines" ]]; then
+            mostrar_motivo_final "$order_lines"
+            mostrar_facturas_comprador "$order_lines"
+            mostrar_otros_rechazos "$order_lines"
+            mostrar_cronologia "$order_lines"
         fi
     fi
 
