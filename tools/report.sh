@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# report.sh — Informe financiero de actividad de la instancia Mostro
+# report.sh — Estado del nodo e informe financiero de la instancia Mostro
+#
+# Arriba, un bloque fijo con la foto del instante: que hay vivo, cuanto dinero
+# hay en juego y que esta encallado. Debajo, el informe por periodo de siempre.
 # Uso: report.sh [today|week|month|year|all] [YYYY-MM-DD YYYY-MM-DD]
 
 set -euo pipefail
@@ -59,6 +62,159 @@ printf "${BOLD}${ORANGE}╔═════════════════�
 printf "${BOLD}${ORANGE}║         INFORME FINANCIERO · NOSTROMOSTRO                    ║${NC}\n"
 printf "${BOLD}${ORANGE}╚══════════════════════════════════════════════════════════════╝${NC}\n"
 printf "  ${DIM}Periodo:${NC} ${BOLD}$LABEL${NC}    ${DIM}Generado:${NC} $(date '+%Y-%m-%d %H:%M:%S')\n"
+echo ""
+
+# ── 0. ESTADO DEL NODO AHORA ──────────────────────────────────────────────────
+#
+# Bloque fijo: el informe de abajo mira un periodo, esto mira el instante. Son
+# las preguntas de guardia — que hay vivo, cuanto dinero hay en juego y si algo
+# esta encallado — y no se responden con los agregados del periodo.
+#
+# Todo sale de la instantanea y del log, nunca de la base en uso. Cuidado al
+# tocar esto: el script corre con `set -euo pipefail`, asi que cualquier grep
+# que pueda no encontrar nada necesita `|| true` o aborta el informe entero.
+
+fmt_edad() {
+    local s="${1:-0}"
+    [ -z "$s" ] || [ "$s" = "NULL" ] && s=0
+    if   [ "$s" -ge 86400 ]; then echo "$((s/86400)) d"
+    elif [ "$s" -ge 3600 ];  then echo "$((s/3600)) h"
+    elif [ "$s" -ge 60 ];    then echo "$((s/60)) m"
+    else echo "${s} s"; fi
+}
+
+AVISOS=()
+
+printf "${BOLD}${CYAN}▌ ESTADO DEL NODO AHORA${NC}\n"
+echo "  ─────────────────────────────────────────────────────────────"
+
+# Cuanto se ha alejado la instantanea de la realidad. Sin esto no se sabe si lo
+# que se esta leyendo es de ahora o de hace un minuto largo.
+snap_age=$(( $(date +%s) - $(stat -c %Y "$DB_PATH" 2>/dev/null || echo 0) ))
+printf "  ${DIM}Instantánea de hace %s${NC}\n\n" "$(fmt_edad $snap_age)"
+
+# ── Ordenes vivas ─────────────────────────────────────────────────────────────
+# La antiguedad de la mas vieja es lo que distingue una orden sana de una
+# encallada; sin esa columna la lista no dice nada.
+printf "  ${BOLD}Órdenes vivas${NC}\n"
+NOW=$(date +%s)
+vivas=$(sql "
+    SELECT status, COUNT(*), COALESCE(SUM(amount),0),
+           MAX($NOW - COALESCE(NULLIF(taken_at,0), created_at))
+    FROM orders
+    WHERE status IN ('pending','waiting-payment','waiting-buyer-invoice',
+                     'active','fiat-sent','settled-hold-invoice','dispute','payment-failed')
+    GROUP BY status ORDER BY COUNT(*) DESC" | tr '|' ' ') || true
+
+total_vivas=0
+if [ -n "$vivas" ]; then
+    while read -r st n sats edad; do
+        [ -z "${st:-}" ] && continue
+        total_vivas=$(( total_vivas + n ))
+        if [ "${sats:-0}" -gt 0 ]; then
+            printf "    %-22s %3s  %12s sats   ${DIM}más antigua: %s${NC}\n" \
+                "$st" "$n" "$(fmt_sats "$sats")" "$(fmt_edad "$edad")"
+        else
+            printf "    %-22s %3s  %12s        ${DIM}más antigua: %s${NC}\n" \
+                "$st" "$n" "-" "$(fmt_edad "$edad")"
+        fi
+        # Un escrow liquidado es dinero ya cobrado al vendedor y aun no entregado
+        # al comprador: pasada una hora deja de ser un trade en curso.
+        if [ "$st" = "settled-hold-invoice" ] && [ "${edad:-0}" -gt 3600 ]; then
+            AVISOS+=("$n orden(es) con escrow liquidado sin pagar — la más antigua, $(fmt_edad "$edad")")
+        fi
+        if [ "$st" = "dispute" ] && [ "${edad:-0}" -gt 604800 ]; then
+            AVISOS+=("$n disputa(s) abierta(s) — la más antigua, $(fmt_edad "$edad")")
+        fi
+    done <<< "$vivas"
+else
+    printf "    ${DIM}Ninguna${NC}\n"
+fi
+printf "    ${DIM}%-22s %3s${NC}\n" "total" "$total_vivas"
+echo ""
+
+# ── Dinero en juego ───────────────────────────────────────────────────────────
+printf "  ${BOLD}Dinero en juego${NC}\n"
+IFS='|' read -r m_pagar m_hold m_bonds <<< "$(sql "SELECT
+    (SELECT COALESCE(SUM(amount),0) FROM orders WHERE status='settled-hold-invoice'),
+    (SELECT COALESCE(SUM(amount),0) FROM orders WHERE status IN ('active','fiat-sent')),
+    (SELECT COALESCE(SUM(amount_sats),0) FROM bonds WHERE state='locked')")" || true
+printf "    %-38s %12s sats\n" "Escrow liquidado, pendiente de pagar" "$(fmt_sats "${m_pagar:-0}")"
+printf "    %-38s %12s sats\n" "Retenido en hold invoice (en curso)"  "$(fmt_sats "${m_hold:-0}")"
+printf "    %-38s %12s sats\n" "Fianzas bloqueadas"                   "$(fmt_sats "${m_bonds:-0}")"
+echo ""
+
+# ── Pagos ─────────────────────────────────────────────────────────────────────
+printf "  ${BOLD}Pagos${NC} ${DIM}(últimas 24 h)${NC}\n"
+fallidos=$(sql "SELECT COUNT(*) FROM orders WHERE failed_payment=1
+                AND status NOT IN ('success','canceled','expired','canceled-by-admin')") || fallidos=0
+printf "    %-38s %12s\n" "Órdenes con pago fallido pendiente" "${fallidos:-0}"
+
+rechazadas="n/d"; colgadas="n/d"; colgadas_n=0
+if [ -n "${MOSTRO_LOG:-}" ] && [ -r "$MOSTRO_LOG" ]; then
+    CUT=$(date -u -d "24 hours ago" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "")
+    if [ -n "$CUT" ]; then
+        LOG24=$(mktemp); trap 'rm -f "$LOG24"' EXIT
+        # Solo la cola: el log pasa de 500 MB y recorrerlo entero cuesta 5 s
+        # frente a 1,3. El grep de la marca de tiempo NO es decorativo: sin el,
+        # una linea de continuacion como "Edited order: ..." empieza por 'E',
+        # que es mayor que '2' al comparar texto, y se cuela en la ventana.
+        tail -n 800000 "$MOSTRO_LOG" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' \
+            | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' > "$LOG24.raw" || true
+        # Si la cola empieza despues del corte, la ventana estaria truncada y la
+        # cifra mentiria por abajo: se recorre el fichero entero.
+        primera=$(head -1 "$LOG24.raw" 2>/dev/null | cut -c1-19 || true)
+        if [ -n "$primera" ] && [ "$primera" \> "$CUT" ]; then
+            sed 's/\x1b\[[0-9;]*m//g' "$MOSTRO_LOG" \
+                | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' > "$LOG24.raw" || true
+        fi
+        awk -v c="$CUT" 'substr($0,1,19) >= c' "$LOG24.raw" > "$LOG24" || true
+        rm -f "$LOG24.raw"
+        rechazadas=$(grep -c 'invalid_invoice' "$LOG24" || true)
+        colgadas_n=$(grep 'keeping payout claim' "$LOG24" 2>/dev/null \
+            | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' \
+            | sort -u | wc -l || true)
+        colgadas="$colgadas_n"
+    fi
+fi
+printf "    %-38s %12s\n" "Facturas rechazadas" "$rechazadas"
+printf "    %-38s %12s\n" "Órdenes con HTLC colgado sin resolver" "$colgadas"
+echo ""
+
+[ "${fallidos:-0}" -gt 0 ] && AVISOS+=("${fallidos} orden(es) con el pago al comprador fallido")
+[ "${colgadas_n:-0}" -gt 0 ] && AVISOS+=("${colgadas_n} orden(es) con HTLC colgado: no reintentar a mano, riesgo de doble pago")
+
+# ── Relays ────────────────────────────────────────────────────────────────────
+# Un relay que deja de aceptar publicaciones no se nota en ningun otro sitio:
+# las ordenes se crean bien y simplemente no le llegan a nadie.
+printf "  ${BOLD}Relays${NC}\n"
+if [ -n "${MOSTRO_LOG:-}" ] && [ -r "$MOSTRO_LOG" ]; then
+    ultima=$(grep 'failed: {' "$MOSTRO_LOG" 2>/dev/null | tail -1 | sed 's/\x1b\[[0-9;]*m//g' || true)
+    if [ -n "$ultima" ]; then
+        hora=$(echo "$ultima" | grep -oE '^[0-9-]+T[0-9:]{8}' | cut -dT -f2 || true)
+        n_ok=$(echo "$ultima" | grep -oE 'RelayUrl\("[^"]+"\)' | sort -u | wc -l || true)
+        if echo "$ultima" | grep -q 'failed: {}'; then
+            printf "    Última publicación: %s · %s relays · ${GREEN}sin fallos${NC}\n" "${hora:-?}" "$n_ok"
+        else
+            fallidos_relay=$(echo "$ultima" | sed 's/.*failed: //' | grep -oE 'RelayUrl\("[^"]+"\)' | sed 's/RelayUrl("//;s/")//' | tr '\n' ' ' || true)
+            printf "    Última publicación: %s · ${RED}fallaron: %s${NC}\n" "${hora:-?}" "${fallidos_relay:-?}"
+            AVISOS+=("Relays rechazando publicaciones: ${fallidos_relay}")
+        fi
+    else
+        printf "    ${DIM}Sin publicaciones registradas${NC}\n"
+    fi
+else
+    printf "    ${DIM}Log no accesible${NC}\n"
+fi
+echo ""
+
+# ── Avisos ────────────────────────────────────────────────────────────────────
+if [ ${#AVISOS[@]} -gt 0 ]; then
+    printf "  ${BOLD}${YELLOW}⚠ Requiere atención${NC}\n"
+    for a in "${AVISOS[@]}"; do printf "    ${YELLOW}·${NC} %s\n" "$a"; done
+else
+    printf "  ${GREEN}✓ Nada que requiera atención${NC}\n"
+fi
 echo ""
 
 # ── 1. RESUMEN DE ACTIVIDAD ───────────────────────────────────────────────────
