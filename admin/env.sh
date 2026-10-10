@@ -34,6 +34,11 @@ WATCHDOG_CONFIG="${WATCHDOG_CONFIG:-$MOSTROD_SRC/config.toml}"
 WATCHDOG_BIN="${WATCHDOG_BIN:-/usr/local/bin/mostro-watchdog}"
 WATCHDOG_SERVICE="${WATCHDOG_SERVICE:-mostro-watchdog.service}"
 
+SERBERO_SRC="${SERBERO_SRC:-$_OWNER_HOME/mostro-sources/serbero}"
+SERBERO_CONFIG="${SERBERO_CONFIG:-/etc/serbero/config.toml}"
+SERBERO_BIN="${SERBERO_BIN:-/usr/local/bin/serbero}"
+SERBERO_SERVICE="${SERBERO_SERVICE:-serbero.service}"
+
 BOT_SERVICE="${BOT_SERVICE:-mostrobot.service}"
 BOT_NOSTR_SERVICE="${BOT_NOSTR_SERVICE:-mostrobot-nostr.service}"
 ACCOUNTING_SERVICE="${ACCOUNTING_SERVICE:-mostro-accounting.service}"

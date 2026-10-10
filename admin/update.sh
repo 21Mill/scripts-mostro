@@ -2,13 +2,14 @@
 # ============================================================================
 # update.sh — Actualización segura de componentes Mostro
 # Descarga binarios precompilados desde GitHub Releases y verifica
-# la integridad con GPG (mostrod/mostrix) o SHA256 (watchdog).
+# la integridad con GPG (mostrod/mostrix), SHA256 (watchdog) o SHA256 sobre tarball (serbero).
 #
 # Uso:
 #   ./update.sh              # Comprobar todos los componentes
 #   ./update.sh mostrod      # Solo mostrod
 #   ./update.sh mostrix      # Solo mostrix
 #   ./update.sh watchdog     # Solo mostro-watchdog
+#   ./update.sh serbero      # Solo serbero
 #   ./update.sh --check      # Solo comprobar, no actualizar
 # ============================================================================
 
@@ -27,10 +28,11 @@ for arg in "$@"; do
         mostrod)  TARGET="mostrod" ;;
         mostrix)  TARGET="mostrix" ;;
         watchdog) TARGET="watchdog" ;;
+        serbero)  TARGET="serbero" ;;
         --help|-h)
             echo "Uso: $0 [componente] [--check]"
             echo ""
-            echo "Componentes: mostrod, mostrix, watchdog"
+            echo "Componentes: mostrod, mostrix, watchdog, serbero"
             echo "Sin argumentos: comprueba todos"
             echo "--check: solo muestra versiones, no actualiza"
             exit 0
@@ -62,6 +64,14 @@ get_musl_triple() {
         x86_64)  echo "x86_64-unknown-linux-musl" ;;
         aarch64) echo "aarch64-unknown-linux-musl" ;;
         armv7l)  echo "armv7-unknown-linux-gnueabi" ;;
+        *) log_error "Arquitectura no soportada: $(uname -m)"; return 1 ;;
+    esac
+}
+
+get_gnu_triple() {
+    case "$(uname -m)" in
+        x86_64)  echo "x86_64-unknown-linux-gnu" ;;
+        aarch64) echo "aarch64-unknown-linux-gnu" ;;
         *) log_error "Arquitectura no soportada: $(uname -m)"; return 1 ;;
     esac
 }
@@ -100,7 +110,7 @@ check_config_changes() {
     local src_dir="$1"
     local config_example=""
 
-    for f in "settings.tpl.toml" "settings.toml.example" "config.example.toml" "config.toml.example"; do
+    for f in "settings.tpl.toml" "settings.toml.example" "config.example.toml" "config.toml.example" "config.sample.toml"; do
         if run_in_dir "$src_dir" "git show origin/main:$f" &>/dev/null; then
             config_example="$f"
             break
@@ -283,6 +293,58 @@ download_and_verify_sha256() {
     echo "$tmpdir/$bin_asset"
 }
 
+# --- Verificación SHA256 sobre tarball (serbero) ---
+
+download_and_verify_tarball() {
+    local repo="$1"
+    local version="$2"
+    local bin_asset="$3"
+    local tmpdir="$4"
+
+    local base_url="https://github.com/$repo/releases/download/v$version"
+
+    log_info "Descargando tarball: $bin_asset"
+    if ! curl -sfL "$base_url/$bin_asset" -o "$tmpdir/$bin_asset"; then
+        log_error "No se pudo descargar $bin_asset"
+        return 1
+    fi
+
+    log_info "Descargando SHA256..."
+    if ! curl -sfL "$base_url/$bin_asset.sha256" -o "$tmpdir/$bin_asset.sha256"; then
+        log_error "No se pudo descargar $bin_asset.sha256"
+        return 1
+    fi
+
+    log_info "Verificando integridad SHA256..."
+    local expected_hash
+    expected_hash=$(awk '{print $1}' "$tmpdir/$bin_asset.sha256")
+    local actual_hash
+    actual_hash=$(sha256sum "$tmpdir/$bin_asset" | awk '{print $1}')
+    if [ -z "$expected_hash" ] || [ "$expected_hash" != "$actual_hash" ]; then
+        log_error "SHA256 no coincide. Esperado: $expected_hash | Obtenido: $actual_hash"
+        return 1
+    fi
+    log_ok "Integridad SHA256 verificada"
+
+    log_info "Extrayendo tarball..."
+    local extract_dir="$tmpdir/extract"
+    mkdir -p "$extract_dir"
+    if ! tar -xzf "$tmpdir/$bin_asset" -C "$extract_dir"; then
+        log_error "No se pudo extraer $bin_asset"
+        return 1
+    fi
+
+    local extracted_bin
+    extracted_bin=$(find "$extract_dir" -type f -name serbero | head -1)
+    if [ -z "$extracted_bin" ]; then
+        log_error "Binario serbero no encontrado dentro de $bin_asset"
+        return 1
+    fi
+
+    chmod +x "$extracted_bin"
+    echo "$extracted_bin"
+}
+
 # --- Instalación y reinicio ---
 
 install_binary() {
@@ -315,7 +377,7 @@ restart_service() {
         sleep 2
         elapsed=$((elapsed + 2))
         if sudo journalctl -u "$service" --since "1 minute ago" --no-pager -q 2>/dev/null \
-            | grep -qE "Connected to (LND|relay)|Settings correctly loaded"; then
+            | grep -qE "Connected to (LND|relay)|Settings correctly loaded|serbero starting"; then
             ok=true
             break
         fi
@@ -352,7 +414,7 @@ update_component() {
     local config_path="$4"
     local service="$5"
     local github_repo="$6"
-    local verify_mode="$7"   # "gpg" o "sha256"
+    local verify_mode="$7"   # "gpg", "sha256" o "tarball"
 
     log_header "$name"
 
@@ -433,6 +495,10 @@ update_component() {
         triple=$(get_musl_triple)
         bin_asset="${name}-${triple}"
         verified_bin=$(download_and_verify_gpg "$github_repo" "$remote_ver" "$bin_asset" "$src_dir" "$tmpdir")
+    elif [ "$verify_mode" = "tarball" ]; then
+        triple=$(get_gnu_triple)
+        bin_asset="${name}-v${remote_ver}-${triple}.tar.gz"
+        verified_bin=$(download_and_verify_tarball "$github_repo" "$remote_ver" "$bin_asset" "$tmpdir")
     else
         bin_asset="${name}-linux-${arch}"
         verified_bin=$(download_and_verify_sha256 "$github_repo" "$remote_ver" "$bin_asset" "$tmpdir")
@@ -502,6 +568,11 @@ fi
 if [ -z "$TARGET" ] || [ "$TARGET" = "watchdog" ]; then
     update_component "mostro-watchdog" "$WATCHDOG_SRC" "$WATCHDOG_BIN" "$WATCHDOG_CONFIG" \
         "$WATCHDOG_SERVICE" "MostroP2P/mostro-watchdog" "sha256"
+fi
+
+if [ -z "$TARGET" ] || [ "$TARGET" = "serbero" ]; then
+    update_component "serbero" "$SERBERO_SRC" "$SERBERO_BIN" "$SERBERO_CONFIG" \
+        "$SERBERO_SERVICE" "MostroP2P/serbero" "tarball"
 fi
 
 echo ""
