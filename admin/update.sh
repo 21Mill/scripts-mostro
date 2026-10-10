@@ -300,6 +300,7 @@ download_and_verify_tarball() {
     local version="$2"
     local bin_asset="$3"
     local tmpdir="$4"
+    local bin_name="$5"
 
     local base_url="https://github.com/$repo/releases/download/v$version"
 
@@ -335,9 +336,9 @@ download_and_verify_tarball() {
     fi
 
     local extracted_bin
-    extracted_bin=$(find "$extract_dir" -type f -name serbero | head -1)
+    extracted_bin=$(find "$extract_dir" -type f -name "$bin_name" | head -1)
     if [ -z "$extracted_bin" ]; then
-        log_error "Binario serbero no encontrado dentro de $bin_asset"
+        log_error "Binario $bin_name no encontrado dentro de $bin_asset"
         return 1
     fi
 
@@ -498,7 +499,7 @@ update_component() {
     elif [ "$verify_mode" = "tarball" ]; then
         triple=$(get_gnu_triple)
         bin_asset="${name}-v${remote_ver}-${triple}.tar.gz"
-        verified_bin=$(download_and_verify_tarball "$github_repo" "$remote_ver" "$bin_asset" "$tmpdir")
+        verified_bin=$(download_and_verify_tarball "$github_repo" "$remote_ver" "$bin_asset" "$tmpdir" "$name")
     else
         bin_asset="${name}-linux-${arch}"
         verified_bin=$(download_and_verify_sha256 "$github_repo" "$remote_ver" "$bin_asset" "$tmpdir")
