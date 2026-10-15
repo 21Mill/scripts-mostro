@@ -38,6 +38,11 @@ Los valores comentados en `.env.example` muestran los defaults. Solo necesitas d
 | `WATCHDOG_CONFIG` | `$MOSTROD_SRC/config.toml` | Configuración del watchdog |
 | `WATCHDOG_BIN` | `/usr/local/bin/mostro-watchdog` | Binario del watchdog |
 | `WATCHDOG_SERVICE` | `mostro-watchdog.service` | Servicio systemd |
+| `SERBERO_SRC` | `~/mostro-sources/serbero` | Fuentes de serbero |
+| `SERBERO_CONFIG` | `/etc/serbero/config.toml` | Configuración de serbero |
+| `SERBERO_BIN` | `/usr/local/bin/serbero` | Binario de serbero |
+| `SERBERO_SERVICE` | `serbero.service` | Servicio systemd |
+| `SERBERO_DB` | `/var/lib/serbero/serbero.db` | Mediaciones de Serbero. **Fuera de la instantánea**: la lee `tools/dispute.sh` con sudo |
 | `BOT_SERVICE` | `mostrobot.service` | Servicio del bot de Telegram |
 | `BOT_NOSTR_SERVICE` | `mostrobot-nostr.service` | Servicio del bot de Nostr |
 | `ACCOUNTING_SERVICE` | `mostro-accounting.service` | Servicio de contabilidad |
@@ -46,7 +51,7 @@ Los valores comentados en `.env.example` muestran los defaults. Solo necesitas d
 | `MOSTRO_DB` | `$MOSTROD_SRC/mostro.db` | Base real. **Solo la usa `update.sh`** para el respaldo previo a una actualización |
 | `MOSTRO_DB_RO` | `/var/lib/mostro-snapshot/mostro.db` | Instantánea de solo lectura. De aquí leen todas las consultas |
 | `MOSTRO_DISPUTES_DB_RO` | `/var/lib/mostro-snapshot/disputes.db` | Instantánea de disputas |
-| `MOSTRO_LOG` | *(vacío = journalctl)* | Archivo de log |
+| `MOSTRO_LOG` | `/var/log/mostro.log` | Log de mostrod. Escribe a fichero (`StandardOutput=append:`), así que `journalctl -u mostro` sale **siempre vacío** |
 | `TELEGRAM_TOKEN` | — | Token del bot de ofertas |
 | `TELEGRAM_CHAT_ID` | — | Canal **público** donde se publican las ofertas |
 | `TELEGRAM_TEST_CHAT_ID` | — | Chat para `test-telegram.py` |
@@ -94,6 +99,14 @@ Detalles que el script documenta y conviene no perder:
   las escrituras recientes no tocan el fichero principal, así que mirar solo `.db` dejaría
   la instantánea congelada.
 
+### La excepción: la base de Serbero
+
+`$SERBERO_DB` no entra en la instantánea, y no por olvido: `mostro-snapshot` corre como
+`mostro` y `/var/lib/serbero` es `serbero:serbero 700`, así que no puede leerla. Abrirla al
+grupo expondría las conversaciones privadas entre comprador y vendedor. Por eso
+`tools/dispute.sh` es la única herramienta de consulta que pide `sudo` — interactivo, sin
+regla de sudoers — y abre la base con `-readonly`.
+
 ## Scripts
 
 ### admin/setup.sh
@@ -106,7 +119,15 @@ Asistente interactivo de configuración. Pregunta las rutas, valida que existen,
 
 ### admin/update.sh
 
-Actualización segura de componentes Mostro (mostrod, mostrix, mostro-watchdog). Descarga binarios precompilados desde GitHub Releases y verifica su integridad con GPG (doble firma: negrunch + arkanoider) y SHA256 antes de instalar.
+Actualización segura de componentes Mostro (mostrod, mostrix, mostro-watchdog, serbero). Descarga binarios precompilados desde GitHub Releases y verifica su integridad antes de instalar, con el método que publica cada proyecto:
+
+| Componente | Verificación |
+|------------|--------------|
+| mostrod, mostrix | Firma GPG del `manifest.txt` — **basta una válida**, de negrunch o de arkanoider — y luego SHA256 del binario |
+| mostro-watchdog | SHA256 del binario |
+| serbero | SHA256 sobre el tarball |
+
+Si ninguna firma GPG es válida, aborta. No es un caso teórico: **mostrix v0.3.8 se publicó sin ninguna firma** (todas las anteriores llevan la de arkanoider), y el script se negó a instalarla, con razón.
 
 Antes de cada actualización:
 - Hace backup del binario, la configuración **y la base de datos** (`mostro.db`)
@@ -122,6 +143,7 @@ Tras instalar:
 ./admin/update.sh mostrod      # Solo mostrod
 ./admin/update.sh mostrix      # Solo mostrix
 ./admin/update.sh watchdog     # Solo mostro-watchdog
+./admin/update.sh serbero      # Solo serbero
 ./admin/update.sh --check      # Solo comprobar versiones, sin actualizar
 ```
 
@@ -202,6 +224,22 @@ Cuando una orden tuvo disputa, la columna **DISPUTA** dice cómo se resolvió, p
 ./tools/user.sh <pubkey> --json             # Salida JSON para encadenar con otros scripts
 ./tools/user.sh --top                       # Usuarios con más órdenes
 ```
+
+### tools/dispute.sh
+
+Lee la mediación que Serbero hizo de una disputa: la conversación entre las partes, la lectura del juez y la cronología de eventos.
+
+Hace falta porque esos mensajes no están en ningún otro sitio consultable. Serbero toma la disputa con **su** clave, no con la del solver, así que nunca llega a la base local de mostrix y su panel SERBERO no la muestra. Y sus mensajes (`brief`, `transcript`, `final_report`) viajan como DM de Nostr al solver: `mostro-watchdog` los descifra, pero a Telegram solo relaya el **estado** (`mediating`, `handed off: facts_gathered`), nunca el contenido.
+
+La salida marca con una línea dónde ocurrió el handoff. Importa: Serbero cierra la recogida de hechos en cuanto cree tenerlos, y lo que las partes digan después ya no entró en su valoración.
+
+```bash
+sudo ./tools/dispute.sh                  # Últimas mediaciones
+sudo ./tools/dispute.sh a1b2c3d4         # Conversación completa (basta el prefijo)
+sudo DISPUTE_LIMIT=50 ./tools/dispute.sh
+```
+
+Si una disputa no tiene sesión, lo dice: significa que Serbero no la medió, no que falte el dato.
 
 ### tools/report.sh
 
@@ -400,6 +438,9 @@ grupo `mostro` y el usuario que consulta no puede leerlas.
 | `mostro-accounting.service` | `accounting/accounting.py` — contabilidad en tiempo real |
 | `mostro-snapshot.service` + `.timer` | `bin/mostro-snapshot` — instantánea cada minuto |
 
+`serbero.service` no está versionado aquí: corre como su propio usuario `serbero` y recibe la
+clave privada por `LoadCredential`, no por el `.env`. `./admin/update.sh serbero` sí lo actualiza.
+
 ### Cron
 
 ```cron
@@ -428,7 +469,7 @@ servidor. `run-tests.sh` los encadena y añade una comprobación de sintaxis de 
 ```
 .
 ├── .env.example            # Plantilla de configuración
-├── .gitignore              # Excluye .env, logs, bases, orders y estado
+├── .gitignore              # Excluye .env, logs, bases, orders, estado y copias .bak
 ├── run-tests.sh            # Lanza todas las comprobaciones
 ├── images/                 # Capturas de pantalla
 ├── lib/
@@ -447,6 +488,8 @@ servidor. `run-tests.sh` los encadena y añade una comprobación de sintaxis de 
 │   └── check_channels.sh   # Alerta Telegram si >2 canales LND caídos
 ├── tools/
 │   ├── order.sh            # Consulta de órdenes
+│   ├── user.sh             # Historial y reputación de un usuario
+│   ├── dispute.sh          # Mediación de Serbero: conversación y veredicto
 │   ├── report.sh           # Informe financiero de actividad
 │   ├── logs.sh             # Búsqueda en logs
 │   └── monitor.sh          # Monitor de transacciones BTC
