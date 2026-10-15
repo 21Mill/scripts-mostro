@@ -38,6 +38,10 @@ SERBERO_SRC="${SERBERO_SRC:-$_OWNER_HOME/mostro-sources/serbero}"
 SERBERO_CONFIG="${SERBERO_CONFIG:-/etc/serbero/config.toml}"
 SERBERO_BIN="${SERBERO_BIN:-/usr/local/bin/serbero}"
 SERBERO_SERVICE="${SERBERO_SERVICE:-serbero.service}"
+# Base de Serbero: conversaciones de mediación entre las partes. NO está en el snapshot de
+# solo lectura porque mostro-snapshot corre como mostro y /var/lib/serbero es serbero:serbero 700;
+# abrirla al grupo expondría los chats privados. Las consultas van con sudo interactivo.
+SERBERO_DB="${SERBERO_DB:-/var/lib/serbero/serbero.db}"
 
 BOT_SERVICE="${BOT_SERVICE:-mostrobot.service}"
 BOT_NOSTR_SERVICE="${BOT_NOSTR_SERVICE:-mostrobot-nostr.service}"
