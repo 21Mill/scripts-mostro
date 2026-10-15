@@ -8,3 +8,10 @@ resumen-enviado.json
 .env.bak
 accounting/accounting.db
 informe-mensual-enviado.json
+
+# Copias de seguridad y bases: nunca al repositorio
+*.bak
+*.bak-*
+*.db
+*.db-wal
+*.db-shm
