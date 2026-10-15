@@ -35,9 +35,31 @@ else
     SQL=(sudo sqlite3)
 fi
 
-q() { "${SQL[@]}" -readonly -noheader -separator "$US" "$SERBERO_DB" "$1"; }
+# El contenido de la base lo escriben comprador y vendedor, así que se le quitan los
+# caracteres de control antes de que lleguen al terminal: una secuencia ANSI en un mensaje
+# de disputa podría repintar o manipular la sesión de quien lo lee. Se conservan tabulador,
+# salto de línea y los dos separadores.
+q() {
+    "${SQL[@]}" -readonly -noheader -separator "$US" "$SERBERO_DB" "$1" \
+        | tr -d '\000-\010\013-\035\177'
+}
 
 fecha() { [ -z "$1" ] || [ "$1" = "0" ] && { echo "-"; return; }; date -u -d "@$1" "+%Y-%m-%d %H:%M:%S"; }
+
+# Un UUID solo tiene hex y guiones. La comprobación no es cosmética: estas consultas se
+# interpolan en SQL y sqlite3 corre aquí como root, así que un argumento como
+#   '; select writefile('/etc/cron.d/x','...'); --
+# escribiría ficheros arbitrarios. El -readonly no lo evita: bloquea escrituras en la base,
+# no en el sistema de ficheros. Se valida también lo que vuelve de la base (segundo orden).
+id_valido() { [[ "$1" =~ ^[0-9a-fA-F-]{1,36}$ ]]; }
+
+exige_id() {
+    if ! id_valido "$1"; then
+        echo -e "${RED}❌ Identificador no válido: '$1'${NC}" >&2
+        echo "Se esperan solo dígitos hexadecimales y guiones (máximo 36 caracteres)." >&2
+        exit 1
+    fi
+}
 
 # ---------------------------------------------------------------- listado ---
 if [ -z "$DISPUTE_ID" ]; then
@@ -63,6 +85,8 @@ if [ -z "$DISPUTE_ID" ]; then
 fi
 
 # ------------------------------------------------------------- una disputa ---
+exige_id "$DISPUTE_ID"
+
 COINCIDENCIAS=$(q "select dispute_id from sessions where dispute_id like '${DISPUTE_ID}%' order by opened_at")
 TOTAL=$(echo "$COINCIDENCIAS" | grep -c . || true)
 
@@ -78,6 +102,7 @@ elif [ "$TOTAL" -gt 1 ]; then
 fi
 
 ID="$COINCIDENCIAS"
+exige_id "$ID"
 IFS="$US" read -r SESION ESTADO CICLO ESTADO_AT INICIA IMPORTE DIVISA METODO PUB ABIERTA CERRADA HANDOFF RONDAS RC RV < <(
     q "select s.session_id, coalesce(d.status,'-'), coalesce(d.lifecycle,'-'), coalesce(d.status_at,0),
               coalesce(d.initiator,'-'), coalesce(s.fiat_amount,'-'), coalesce(s.fiat_code,''),
@@ -96,6 +121,8 @@ echo "  la abrió    $INICIA"
 echo "  orden       $IMPORTE $DIVISA vía $METODO, publicada $(fecha "$PUB")"
 echo "  mediación   $(fecha "$ABIERTA") → $(fecha "$CERRADA")"
 echo "  handoff     $HANDOFF   rondas: $RONDAS (comprador $RC, vendedor $RV)"
+
+exige_id "$SESION"
 
 HANDOFF_AT=$(q "select created_at from events where session_id='$SESION' and kind='handoff' limit 1")
 
@@ -119,7 +146,7 @@ else
             etiqueta="${BOLD}$quien${NC} →"
         fi
         echo -e "\n  $(fecha "$cuando")  $etiqueta"
-        echo "$texto" | tr "$RS" '\n' | sed 's/^/      /'
+        printf '%s\n' "$texto" | tr "$RS" '\n' | sed 's/^/      /'
         [ "$adj" != "0" ] && echo "      ($adj adjunto/s)"
     done <<< "$MENSAJES"
 fi
