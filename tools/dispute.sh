@@ -9,9 +9,9 @@
 # por Nostr sin pasar por Telegram: el watchdog solo relaya el estado. Esta es
 # la única forma de leer qué se dijeron las partes.
 #
-# Requiere sudo porque $SERBERO_DB es serbero:serbero 700 y no está en el
-# snapshot de solo lectura (mostro-snapshot corre como mostro y no puede
-# leerla). No se añade ninguna regla de sudoers: se pide la contraseña.
+# Pide la contraseña de sudo para la consulta: $SERBERO_DB es serbero:serbero 700
+# y no está en el snapshot de solo lectura, porque mostro-snapshot corre como
+# mostro y no puede leerla. No se añade ninguna regla de sudoers.
 # La base se abre en modo lectura, así que es seguro con serbero escribiendo.
 # ============================================================================
 
@@ -22,17 +22,26 @@ LIMIT="${DISPUTE_LIMIT:-20}"
 US=$'\x1f'   # separador de campos
 RS=$'\x1e'   # marca de salto de línea dentro de un campo
 
-if [ ! -f "$SERBERO_DB" ]; then
-    echo -e "${RED}❌ No existe $SERBERO_DB${NC}"
-    echo "Serbero no está instalado en esta máquina, o la ruta cambió (SERBERO_DB)."
-    exit 1
-fi
-
-# sudo solo si no podemos leerla ya (permite probar con SERBERO_DB=fixture.db)
+# La base es serbero:serbero 700: un test -f daría falso por permiso, no por ausencia. Se
+# eleva SOLO la consulta, y al dueño de la base en vez de a root. Reejecutar el script entero
+# con sudo sería peor: sourcearía admin/env.sh con privilegio, pondría el directorio de
+# trabajo en el sys.path de python, y perdería DISPUTE_LIMIT y SERBERO_DB porque sudo
+# descarta el entorno del llamante.
 if [ -r "$SERBERO_DB" ]; then
     SQL=(sqlite3)
+elif [ -x "$(dirname "$SERBERO_DB")" ] && [ ! -e "$SERBERO_DB" ]; then
+    echo -e "${RED}❌ No existe $SERBERO_DB${NC}" >&2
+    echo "Serbero no está instalado aquí, o la ruta cambió (SERBERO_DB)." >&2
+    exit 1
 else
-    SQL=(sudo sqlite3)
+    SQL=(sudo -u serbero sqlite3)
+fi
+
+# Sonda de apertura. No se afirma la causa: puede ser ausencia, permiso o sudo denegado.
+if ! "${SQL[@]}" -readonly "$SERBERO_DB" 'select 1' >/dev/null 2>&1; then
+    echo -e "${RED}❌ No se pudo abrir $SERBERO_DB${NC}" >&2
+    echo "Revisa que Serbero esté instalado, el valor de SERBERO_DB y tu permiso de sudo." >&2
+    exit 1
 fi
 
 # El contenido de la base lo escriben comprador y vendedor, así que se le quitan los
@@ -159,7 +168,7 @@ if [ -n "$VEREDICTOS" ]; then
     while IFS="$US" read -r juez version tokens ultimo accion respuestas; do
         echo -e "\n  ${BOLD}$juez${NC}  ($version, $tokens tokens, hasta el mensaje $ultimo)"
         echo "  acción: $accion"
-        echo "$respuestas" | python3 -c '
+        echo "$respuestas" | python3 -I -c '
 import json, sys
 try:
     data = json.load(sys.stdin)

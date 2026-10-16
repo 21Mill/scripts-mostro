@@ -234,10 +234,12 @@ Hace falta porque esos mensajes no están en ningún otro sitio consultable. Ser
 La salida marca con una línea dónde ocurrió el handoff. Importa: Serbero cierra la recogida de hechos en cuanto cree tenerlos, y lo que las partes digan después ya no entró en su valoración.
 
 ```bash
-sudo ./tools/dispute.sh                  # Últimas mediaciones
-sudo ./tools/dispute.sh a1b2c3d4         # Conversación completa (basta el prefijo)
-sudo DISPUTE_LIMIT=50 ./tools/dispute.sh
+./tools/dispute.sh                  # Últimas mediaciones
+./tools/dispute.sh a1b2c3d4         # Conversación completa (basta el prefijo)
+DISPUTE_LIMIT=50 ./tools/dispute.sh
 ```
+
+Pide la contraseña de `sudo` para la consulta, que se ejecuta como el usuario `serbero`, dueño de la base: `$SERBERO_DB` es `serbero:serbero 700`, así que un usuario normal no puede ni comprobar si el fichero existe, y hacer esa comprobación sin permiso daba un «no existe» engañoso. Solo se eleva la consulta, nunca el script entero.
 
 Si una disputa no tiene sesión, lo dice: significa que Serbero no la medió, no que falte el dato.
 
