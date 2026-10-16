@@ -217,12 +217,23 @@ download_and_verify_gpg() {
     import_gpg_keys "$src_dir"
 
     log_info "Descargando binario: $bin_asset"
-    curl -sL "$base_url/$bin_asset" -o "$tmpdir/$bin_asset"
+    if ! curl -sfL "$base_url/$bin_asset" -o "$tmpdir/$bin_asset"; then
+        log_error "No se pudo descargar $bin_asset"
+        return 1
+    fi
 
     log_info "Descargando manifest y firmas..."
-    curl -sL "$base_url/manifest.txt"                -o "$tmpdir/manifest.txt"
-    curl -sL "$base_url/manifest.txt.sig.negrunch"   -o "$tmpdir/manifest.txt.sig.negrunch"
-    curl -sL "$base_url/manifest.txt.sig.arkanoider" -o "$tmpdir/manifest.txt.sig.arkanoider"
+    if ! curl -sfL "$base_url/manifest.txt" -o "$tmpdir/manifest.txt"; then
+        log_error "No se pudo descargar manifest.txt"
+        return 1
+    fi
+    # Una firma puede faltar legítimamente: mostrix v0.3.8 se publicó sin ninguna. No se aborta
+    # aquí para que lo explique la comprobación de abajo, que es la que sabe que basta una. Se
+    # borra el fichero si no llegó, para que gpg no verifique el resto de un intento anterior.
+    curl -sfL "$base_url/manifest.txt.sig.negrunch"   -o "$tmpdir/manifest.txt.sig.negrunch" \
+        || rm -f "$tmpdir/manifest.txt.sig.negrunch"
+    curl -sfL "$base_url/manifest.txt.sig.arkanoider" -o "$tmpdir/manifest.txt.sig.arkanoider" \
+        || rm -f "$tmpdir/manifest.txt.sig.arkanoider"
 
     log_info "Verificando firmas GPG (basta con una válida)..."
     local sig_ok=false
@@ -273,10 +284,16 @@ download_and_verify_sha256() {
     local base_url="https://github.com/$repo/releases/download/v$version"
 
     log_info "Descargando binario: $bin_asset"
-    curl -sL "$base_url/$bin_asset" -o "$tmpdir/$bin_asset"
+    if ! curl -sfL "$base_url/$bin_asset" -o "$tmpdir/$bin_asset"; then
+        log_error "No se pudo descargar $bin_asset"
+        return 1
+    fi
 
     log_info "Descargando SHA256..."
-    curl -sL "$base_url/$bin_asset.sha256" -o "$tmpdir/$bin_asset.sha256"
+    if ! curl -sfL "$base_url/$bin_asset.sha256" -o "$tmpdir/$bin_asset.sha256"; then
+        log_error "No se pudo descargar $bin_asset.sha256"
+        return 1
+    fi
 
     log_info "Verificando integridad SHA256..."
     local expected_hash
