@@ -60,10 +60,15 @@ comprobar("un canal por ID negativo tampoco",
 # El .env del nodo apuntó TELEGRAM_TEST_CHAT_ID al chat privado del operador, que es justo
 # lo que recomienda el docstring de test-telegram.py. La lista negra se tragó entonces el
 # destino del propio resumen y el bloque de cuentas desapareció, sin un solo aviso en el log.
-os.environ["TELEGRAM_TEST_CHAT_ID"] = "123456789"
-comprobar("el chat del operador es privado aunque el de pruebas apunte a él",
-          resumen.destino_privado("123456789"), True)
-os.environ["TELEGRAM_TEST_CHAT_ID"] = "-1001111111111"
+# Se restaura lo que hubiera, no el literal de la cabecera: dar por supuesto el valor de una
+# variable de entorno es justo el error que este test existe para cubrir.
+_test_chat_previo = os.environ["TELEGRAM_TEST_CHAT_ID"]
+try:
+    os.environ["TELEGRAM_TEST_CHAT_ID"] = "123456789"
+    comprobar("el chat del operador es privado aunque el de pruebas apunte a él",
+              resumen.destino_privado("123456789"), True)
+finally:
+    os.environ["TELEGRAM_TEST_CHAT_ID"] = _test_chat_previo
 
 comprobar("sin destino, no", resumen.destino_privado(None), False)
 comprobar("cadena vacía, no", resumen.destino_privado(""), False)
