@@ -371,7 +371,36 @@ el `href` y deja un texto muerto. De ahí el rodeo por el cliente web, que adem�
 no tiene la app instalada. Para abrir la app nativa haría falta una página propia que rebote
 al esquema, y entonces solo cambiaría `MOSTRO_WEB_APP`.
 
-**Dependencias:** `pip install websocket-client requests python-dotenv`
+#### Las firmas de los eventos
+
+Todo lo que entra por un relay se verifica antes de mirarlo siquiera. El filtro `authors` de
+la suscripción no sirve de nada por sí solo: lo aplica el relay, que es de quien se
+desconfía, así que sin comprobar firmas un relay hostil podría fabricar ofertas enteras
+—importes, divisa, métodos de pago, premium— y publicarlas en el canal con nuestra marca.
+
+`evento_autentico()` hace tres comprobaciones y las tres hacen falta. Que el autor sea
+`MOSTRO_PUBKEY`. Que el id **recalculado** a partir de los datos coincida con el que trae el
+evento: la firma va sobre el id, de modo que verificarla sola dejaría pasar un par
+(id, firma) auténtico con el contenido sustituido. Y la firma Schnorr sobre ese id ya
+comprobado, con `coincurve`, que envuelve libsecp256k1.
+
+El id se serializa con `ensure_ascii=False`, que no es un detalle: un método de pago con una
+tilde o un emoji daría otro hash y el evento, siendo auténtico, se rechazaría.
+
+Hay dos puertas, las dos en `bot/common.py`: `_consultar()` para la puesta al día y
+`al_recibir()` para el directo. En el directo se descarta **antes** de `filtro_novedades`,
+porque esa función apunta los ids que ve y un evento falso podría envenenar esa memoria.
+
+Un relay que contesta con eventos y ninguno es válido se trata como si no hubiera
+contestado, no como si no hubiera ofertas. La diferencia es el canal entero: con una lista
+vacía, `obtener_pending` vería cero pending y `reconciliar` retiraría todos los mensajes
+publicados. Una lista vacía de verdad, porque no había nada, sigue siendo legítima.
+
+`MOSTRO_PUBKEY` tiene que estar en hexadecimal de 64 caracteres. Con un `npub` no se
+validaría ni un evento, así que `common.py` lo comprueba al arrancar en vez de dejar que el
+canal se quede mudo sin explicación.
+
+**Dependencias:** `pip install websocket-client requests python-dotenv coincurve`
 
 ```bash
 python3 bot/bot.py
@@ -382,7 +411,8 @@ python3 bot/bot.py --dry-run    # enseña qué publicaría y qué retiraría
 
 Bot que publica las ofertas como notas (kind 1) en Nostr desde un pubkey dedicado. Cuando una oferta deja de estar pendiente, envía un evento de borrado (NIP-09, kind 5). Si no existe un `NOSTR_BOT_NSEC` en el `.env`, genera las claves automáticamente.
 
-**Dependencias:** `pip install websocket-client pynostr python-dotenv`
+**Dependencias:** `pip install websocket-client pynostr python-dotenv coincurve`
+(`pynostr` ya arrastra `coincurve`, pero conviene que esté dicho.)
 
 ```bash
 python3 bot/bot-nostr.py
