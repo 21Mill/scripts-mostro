@@ -54,7 +54,7 @@ Los valores comentados en `.env.example` muestran los defaults. Solo necesitas d
 | `MOSTRO_LOG` | `/var/log/mostro.log` | Log de mostrod. Escribe a fichero (`StandardOutput=append:`), así que `journalctl -u mostro` sale **siempre vacío** |
 | `TELEGRAM_TOKEN` | — | Token del bot de ofertas |
 | `TELEGRAM_CHAT_ID` | — | Canal **público** donde se publican las ofertas |
-| `TELEGRAM_TEST_CHAT_ID` | — | Chat para `test-telegram.py` |
+| `TELEGRAM_TEST_CHAT_ID` | — | Chat para `test-telegram.py`. **Hoy apunta al canal público de ofertas** |
 | `TELEGRAM_MONITOR_TOKEN` | — | Bot para los avisos privados al operador |
 | `TELEGRAM_MONITOR_CHAT_ID` | — | Chat privado del operador (contabilidad, `monitor.sh`) |
 | `TELEGRAM_STATS_TOKEN` | *(cae a `TELEGRAM_TOKEN`)* | Bot para el resumen diario y el informe mensual |
@@ -391,7 +391,11 @@ python3 bot/bot-nostr.py --dry-run
 
 ### bot/test-telegram.py
 
-Comprueba que las credenciales de Telegram funcionan, publicando en `TELEGRAM_TEST_CHAT_ID`.
+Comprueba que las credenciales de Telegram funcionan, publicando en `TELEGRAM_TEST_CHAT_ID`,
+que **hoy apunta al canal público de ofertas** —la misma advertencia de la tabla de
+variables—. Antes de enviar consulta `getChat` e imprime adónde va; si el destino no es
+privado se niega, y hay que repetir con `--si-es-publico`. Para probar en privado, apunta
+esa variable a un chat tuyo o usa el par `TELEGRAM_MONITOR_*`.
 
 ```bash
 python3 bot/test-telegram.py
