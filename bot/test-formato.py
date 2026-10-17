@@ -107,6 +107,21 @@ comprobar(
     "",
 )
 
+# El parser de la app recorre los pares de la query y reasigna el nodo en cada 'mostro=',
+# así que gana el último. Comprobar que nuestra clave aparece "en algún sitio" dejaba pasar
+# esto, y el enlace publicado habría llevado al lector al nodo del atacante.
+comprobar(
+    "un source con dos mostro= se descarta: en la app ganaría el último",
+    parsear_oferta(evento(source=f"mostro:{ORDEN}?mostro={NODO}&mostro={OTRO_NODO}"))["enlace"],
+    "",
+)
+
+comprobar(
+    "un source con el id en el host (mostro://) se descarta: no es lo que escribe el demonio",
+    parsear_oferta(evento(source=f"mostro://{ORDEN}?relays={RELAYS}&mostro={NODO}"))["enlace"],
+    "",
+)
+
 
 print("\nformato_texto: cómo sale el enlace en cada canal\n")
 

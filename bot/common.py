@@ -65,10 +65,21 @@ def _enlace_de(tags, order_id):
     0.19.0 y en cualquier estado que no sea pending. Entonces el mensaje sale sin enlace.
     """
     source = tags.get("source", [""])[0]
-    if not source.startswith(f"mostro:{order_id}?"):
+    partes = urllib.parse.urlsplit(source)
+    # El demonio escribe 'mostro:<id>?...', con el id en el path. Un 'mostro://<id>' lo
+    # dejaría en el host: no es lo que él produce, así que no es nuestro.
+    if partes.scheme != "mostro" or partes.netloc or partes.path != order_id:
         return ""
-    if not MOSTRO_PUBKEY or f"mostro={MOSTRO_PUBKEY}" not in source:
+    # parse_qs y no una búsqueda de subcadena. El parser de la app recorre los pares de la
+    # query y reasigna el nodo en cada 'mostro=', de modo que gana el último: comprobar que
+    # nuestra clave aparece en algún sitio dejaba pasar un
+    # 'mostro:<id>?mostro=<nuestra>&mostro=<ajena>' que en la app abre la ajena. Se exige
+    # que haya exactamente un mostro= y que sea el nuestro.
+    if not MOSTRO_PUBKEY or urllib.parse.parse_qs(partes.query).get("mostro") != [MOSTRO_PUBKEY]:
         return ""
+    # Los relays del enlace no se comparan con MOSTRO_RELAY: son los del demonio, que
+    # legítimamente publica en más de los que escucha el bot. Tampoco hace falta, porque la
+    # app comprueba autor, kind y etiqueta d de lo que devuelva cada uno.
     return f"{MOSTRO_WEB_APP}?link={urllib.parse.quote(source, safe='')}"
 
 
