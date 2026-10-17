@@ -56,6 +56,14 @@ comprobar("el canal público declarado no lo es",
 comprobar("el canal de pruebas tampoco, aunque sea un ID numérico",
           resumen.destino_privado("-1001111111111"), False)
 
+# El .env del nodo apuntó TELEGRAM_TEST_CHAT_ID al chat privado del operador, que es justo
+# lo que recomienda el docstring de test-telegram.py. La lista negra se tragó entonces el
+# destino del propio resumen y el bloque de cuentas desapareció, sin un solo aviso en el log.
+os.environ["TELEGRAM_TEST_CHAT_ID"] = "123456789"
+comprobar("el chat del operador es privado aunque el de pruebas apunte a él",
+          resumen.destino_privado("123456789"), True)
+os.environ["TELEGRAM_TEST_CHAT_ID"] = "-1001111111111"
+
 comprobar("sin destino, no", resumen.destino_privado(None), False)
 comprobar("cadena vacía, no", resumen.destino_privado(""), False)
 comprobar("solo espacios, no", resumen.destino_privado("   "), False)
