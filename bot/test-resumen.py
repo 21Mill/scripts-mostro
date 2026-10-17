@@ -51,9 +51,10 @@ comprobar("un canal por @nombre no lo es",
 comprobar("el canal público declarado no lo es",
           resumen.destino_privado(os.environ["TELEGRAM_CHAT_ID"]), False)
 
-# El de pruebas apunta al mismo canal público que el de ofertas. Es la trampa que ya casi
-# se traga el .env.example: un respaldo silencioso a esta variable publicaba en abierto.
-comprobar("el canal de pruebas tampoco, aunque sea un ID numérico",
+# Un canal se descarta por su ID negativo, aunque no sea el declarado en TELEGRAM_CHAT_ID.
+# Es la trampa que ya casi se traga el .env.example: un respaldo silencioso a la variable de
+# pruebas publicaba en abierto.
+comprobar("un canal por ID negativo tampoco",
           resumen.destino_privado("-1001111111111"), False)
 
 # El .env del nodo apuntó TELEGRAM_TEST_CHAT_ID al chat privado del operador, que es justo

@@ -57,9 +57,10 @@ MIN_TRADES_METODOS = 5
 # Origen de las credenciales. Con TELEGRAM_STATS_CONFIG apuntando al config.toml de otro
 # servicio, se reutiliza su bot y su chat. Sin ella, valen las variables del .env.
 #
-# Nada de respaldos implícitos: TELEGRAM_TEST_CHAT_ID apunta al mismo canal público que
-# TELEGRAM_CHAT_ID (@nostromostroofertas), así que usarlo de reserva publicaría en abierto
-# por omisión. Si no hay destino, no se envía.
+# Nada de respaldos implícitos: TELEGRAM_TEST_CHAT_ID es el destino de las pruebas y no
+# hay forma de saber desde aquí adónde apunta hoy —ha apuntado al canal público y también
+# al chat del operador—, así que usarlo de reserva podría publicar en abierto. Si no hay
+# destino, no se envía.
 _CONFIG_TOML = os.getenv("TELEGRAM_STATS_CONFIG")
 if _CONFIG_TOML:
     TOKEN, CHAT_ID = credenciales_de_toml(_CONFIG_TOML)
@@ -76,11 +77,22 @@ SEPARADOR = "━━━━━━━━━━━━━━━━━━━━━"
 def destino_privado(chat_id):
     """¿Puede este chat recibir las cuentas de la instancia?
 
-    Solo un chat privado, es decir: un ID numérico que no sea ninguno de los canales
-    conocidos. Los canales se declaran normalmente con @nombre, pero también se pueden
-    referir por su ID -100..., así que no basta con descartar el arroba: se comparan de
-    forma explícita con TELEGRAM_CHAT_ID y TELEGRAM_TEST_CHAT_ID, que apuntan los dos al
-    canal público de ofertas.
+    Solo un chat privado, y eso lo dice el propio ID: en Telegram los de usuario son
+    positivos y los de grupo, supergrupo y canal negativos (-100...). Un ID positivo es,
+    por tanto, una conversación con una persona. Un @nombre, o cualquier cosa que no sea
+    un número, no lo es.
+
+    Esto antes se decidía comparando el destino contra TELEGRAM_CHAT_ID y
+    TELEGRAM_TEST_CHAT_ID, dando por hecho que las dos apuntaban al canal público. La
+    segunda dejó de hacerlo en cuanto el operador siguió el consejo de test-telegram.py y
+    la apuntó a su propio chat para no volver a publicar pruebas en abierto: la lista negra
+    absorbió entonces el destino del resumen y el bloque de cuentas desapareció sin un solo
+    aviso en el log, porque esta rama no escribe ninguno. El signo del ID no depende de lo
+    que haya en el .env, así que no se puede desconfigurar.
+
+    Se mantiene la comparación con TELEGRAM_CHAT_ID, que es el canal público de verdad,
+    para que siga descartándose por la puerta de delante aunque algún día se declare por ID
+    en vez de por @nombre.
 
     Ante la duda, False. Un bloque de menos es un fallo visible que el operador reporta;
     un bloque de más son sus ingresos publicados en abierto.
@@ -88,14 +100,15 @@ def destino_privado(chat_id):
     if not chat_id:
         return False
     chat_id = str(chat_id).strip()
-    if not chat_id or chat_id.startswith("@"):
+    if not chat_id:
         return False
-    publicos = {
-        str(os.getenv(v, "")).strip()
-        for v in ("TELEGRAM_CHAT_ID", "TELEGRAM_TEST_CHAT_ID")
-    }
-    publicos.discard("")
-    return chat_id not in publicos
+    publico = str(os.getenv("TELEGRAM_CHAT_ID", "")).strip()
+    if publico and chat_id == publico:
+        return False
+    try:
+        return int(chat_id) > 0
+    except ValueError:
+        return False
 
 
 # --- Formateo ---------------------------------------------------------------

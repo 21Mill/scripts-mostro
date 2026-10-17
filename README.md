@@ -337,9 +337,9 @@ del gráfico de la web y que el informe mensual —de ahí que el encabezado lle
 no confundirlo con la cifra de 24 h móviles que aparece más arriba en el mismo mensaje.
 
 Eso es información privada, así que **solo se incluye si el destino se verifica privado**:
-un id numérico que no sea `TELEGRAM_CHAT_ID` ni `TELEGRAM_TEST_CHAT_ID`, los dos apuntando al
-canal público de ofertas. Reapuntar el resumen a un canal hace que el bloque desaparezca, no
-que se publique. Si `accounting.db` no está disponible, se avisa por stdout y el resto del
+un id **numérico y positivo**, que es como Telegram identifica a una persona —los grupos y
+canales son negativos—, y que además no sea el `TELEGRAM_CHAT_ID` del canal de ofertas.
+Reapuntar el resumen a un canal hace que el bloque desaparezca, no que se publique. Si `accounting.db` no está disponible, se avisa por stdout y el resto del
 resumen sale igual: una avería de la contabilidad no debe costarnos también el resumen.
 
 ```bash
