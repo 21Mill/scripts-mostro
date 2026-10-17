@@ -61,6 +61,7 @@ Los valores comentados en `.env.example` muestran los defaults. Solo necesitas d
 | `TELEGRAM_STATS_CHAT_ID` | — | Destino de los informes. **Sin respaldo: vacío = no se envía** |
 | `TELEGRAM_STATS_CONFIG` | — | `config.toml` del que tomar `bot_token` y `chat_id`; tiene prioridad |
 | `MOSTRO_PUBKEY` | — | Clave pública del nodo Mostro |
+| `MOSTRO_WEB_APP` | `https://mostro.network/app/#/order_link` | Base del enlace «Abrir en Mostro» que los bots añaden a cada oferta |
 | `MOSTRO_RELAY` | `wss://relay.mostro.network,wss://relay.kilombino.com,wss://mostro-p2p.tech` | Relays donde leer las ofertas de Mostro, separados por comas (basta con que conteste uno) |
 | `NOSTR_BOT_NSEC` | *(se genera automáticamente)* | Clave privada del bot de Nostr |
 | `NOSTR_BOT_RELAYS` | `wss://relay.damus.io,wss://nos.lol,wss://relay.mostro.network` | Relays donde publicar ofertas |
@@ -358,6 +359,17 @@ python3 bot/resolver-chat-id.py
 ### bot/bot.py
 
 Bot que escucha nuevas ofertas en el relay de Mostro y las publica en un canal de Telegram. Cuando una oferta es tomada, cancelada o expira, el mensaje se borra automáticamente del canal.
+
+Cada mensaje lleva un enlace **Abrir en Mostro** que abre esa oferta en el cliente web, lista
+para tomar. No se construye aquí: sale de la etiqueta `source` que mostrod escribe en las
+ofertas pending (`mostro:<id>?relays=…&mostro=<nodo>`), y solo se acepta si apunta a esa misma
+orden y a `MOSTRO_PUBKEY`, porque el bot no verifica firmas. Un nodo anterior a mostrod 0.19.0
+no escribe la etiqueta y el mensaje sale sin enlace.
+
+El URI `mostro:` no vale directamente en Telegram: la API lo acepta, pero el cliente descarta
+el `href` y deja un texto muerto. De ahí el rodeo por el cliente web, que además sirve a quien
+no tiene la app instalada. Para abrir la app nativa haría falta una página propia que rebote
+al esquema, y entonces solo cambiaría `MOSTRO_WEB_APP`.
 
 **Dependencias:** `pip install websocket-client requests python-dotenv`
 

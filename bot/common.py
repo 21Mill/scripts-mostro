@@ -12,6 +12,7 @@ import os
 import sys
 import threading
 import time
+import urllib.parse
 import websocket
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -38,6 +39,37 @@ MOSTRO_PUBKEY = os.getenv("MOSTRO_PUBKEY")
 # muertas. Mostro publica en varios relays a la vez, así que escuchar en todos quita ese
 # punto único de fallo.
 RELAYS = [r.strip() for r in os.getenv("MOSTRO_RELAY", "").split(",") if r.strip()]
+
+# Dónde se abre una oferta al pulsar su enlace. El cliente web resuelve el enlace de la
+# orden por URL y deja tomarla sin instalar nada. El "#/" no es decorativo: el build de
+# Flutter web no llama a usePathUrlStrategy, así que usa estrategia de hash y sin la
+# almohadilla la ruta no llega a su router. Configurable porque la alternativa —una página
+# propia que rebote al esquema mostro: para abrir la app nativa— solo cambiaría esta base.
+MOSTRO_WEB_APP = os.getenv("MOSTRO_WEB_APP", "https://mostro.network/app/#/order_link")
+
+
+def _enlace_de(tags, order_id):
+    """URL del cliente web para esta oferta, o '' si el evento no trae una creíble.
+
+    El enlace sale tal cual de la etiqueta 'source' que escribe el demonio (mostro,
+    src/nip33.rs, create_source_tag) en las ofertas pending; aquí no se construye nunca. Los
+    relays y la clave del nodo que lleva dentro son suyos, y escribirlos a mano rompería
+    todos los enlaces en silencio el día que cambien en settings.toml.
+
+    Se valida porque el bot no verifica firmas: lee el JSON crudo del relay y se fía del
+    filtro 'authors'. Un relay hostil puede contestar con un evento de autor falseado, así
+    que solo se acepta un source que apunte a esta misma orden y a nuestro nodo. Lo que se
+    publica en un canal abierto no puede acabar apuntando a donde quiera un relay.
+
+    Devuelve '' cuando no hay etiqueta, que es lo normal en un nodo anterior a mostrod
+    0.19.0 y en cualquier estado que no sea pending. Entonces el mensaje sale sin enlace.
+    """
+    source = tags.get("source", [""])[0]
+    if not source.startswith(f"mostro:{order_id}?"):
+        return ""
+    if not MOSTRO_PUBKEY or f"mostro={MOSTRO_PUBKEY}" not in source:
+        return ""
+    return f"{MOSTRO_WEB_APP}?link={urllib.parse.quote(source, safe='')}"
 
 
 def parsear_oferta(evento):
@@ -85,6 +117,7 @@ def parsear_oferta(evento):
         "bond": bond,
         "monto_fiat": monto_fiat,
         "metodos": metodos_texto,
+        "enlace": _enlace_de(tags, order_id),
     }
 
 
@@ -172,6 +205,17 @@ def formato_texto(oferta, html=False):
 
     if tiempo:
         lineas.append(f"\n🕐 {i(tiempo)}")
+
+    # En Telegram el enlace tiene que ir en un ancla https. La etiqueta 'source' trae un URI
+    # 'mostro:', que la API acepta pero el cliente descarta al pintar: el href desaparece y
+    # queda un texto muerto. En Nostr va la URL pelada y en su propia línea, que es como los
+    # clientes la enlazan. Se usa get() porque parsear_oferta no siempre ha devuelto la clave.
+    enlace = oferta.get("enlace")
+    if enlace:
+        if html:
+            lineas.append(f'\n📱 <a href="{enlace}">Abrir en Mostro</a>')
+        else:
+            lineas.append(f"\n📱 Abrir en Mostro:\n{enlace}")
 
     lineas.append(f"\n{code(esc(oferta['order_id']))}")
     lineas.append("━━━━━━━━━━━━━━━━━━━━━")
