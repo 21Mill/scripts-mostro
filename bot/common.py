@@ -6,6 +6,7 @@ una oferta. El envío por Telegram, el formateo de cifras, la persistencia en JS
 carga del .env viven en lib/, porque los usan también scripts que no tocan ningún relay.
 """
 
+import hashlib
 import html as html_mod
 import json
 import os
@@ -24,6 +25,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from lib.entorno import cargar_env
 from lib.formato import fecha_larga, formato_sats
 
+# Falla al importar, no en caliente. El bot publica en un canal abierto lo que le cuenta
+# un relay; arrancar sin poder comprobar quién firmó cada evento es justo lo que esto
+# viene a impedir, así que es mejor no arrancar. En el nodo ya está instalada: pynostr,
+# que usa bot-nostr.py, la trae como dependencia.
+try:
+    from coincurve import PublicKeyXOnly
+except ImportError:
+    raise SystemExit(
+        "Falta coincurve, que verifica las firmas de los eventos: pip install coincurve"
+    )
+
 cargar_env()
 
 # Hora peninsular española: los mensajes quedan fijos en el canal y los lee gente de aquí.
@@ -32,6 +44,15 @@ cargar_env()
 ZONA = ZoneInfo("Europe/Madrid")
 
 MOSTRO_PUBKEY = os.getenv("MOSTRO_PUBKEY")
+
+# En hexadecimal, que es como viene el autor en el evento. Con un npub ahí no fallaría
+# nada visible: simplemente no se validaría ni un solo evento y el canal se quedaría
+# mudo sin explicar por qué. Mejor decirlo al arrancar.
+if MOSTRO_PUBKEY and len(MOSTRO_PUBKEY) != 64:
+    raise SystemExit(
+        f"MOSTRO_PUBKEY debe ser la clave en hexadecimal, 64 caracteres, no "
+        f"{MOSTRO_PUBKEY[:12]}... de {len(MOSTRO_PUBKEY)}"
+    )
 
 # MOSTRO_RELAY admite varios relays separados por comas. Con uno solo, el día que ese relay
 # dejó de contestar (aceptaba la conexión pero no respondía a nada) los bots se quedaron
@@ -46,6 +67,57 @@ RELAYS = [r.strip() for r in os.getenv("MOSTRO_RELAY", "").split(",") if r.strip
 # almohadilla la ruta no llega a su router. Configurable porque la alternativa —una página
 # propia que rebote al esquema mostro: para abrir la app nativa— solo cambiaría esta base.
 MOSTRO_WEB_APP = os.getenv("MOSTRO_WEB_APP", "https://mostro.network/app/#/order_link")
+
+
+def _id_calculado(evento):
+    """El id que le corresponde a este evento según NIP-01.
+
+    sha256 de [0, pubkey, created_at, kind, tags, content] serializado sin espacios y sin
+    escapar lo que no sea ASCII. Las dos cosas importan: con ensure_ascii por defecto, un
+    método de pago con un emoji o una tilde daría otro hash y el evento, siendo auténtico,
+    se rechazaría.
+    """
+    datos = [
+        0,
+        evento["pubkey"],
+        evento["created_at"],
+        evento["kind"],
+        evento["tags"],
+        evento["content"],
+    ]
+    serializado = json.dumps(datos, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(serializado.encode()).hexdigest()
+
+
+def evento_autentico(evento):
+    """True si el evento lo firmó de verdad MOSTRO_PUBKEY.
+
+    Tres comprobaciones, y las tres hacen falta.
+
+    El autor se mira aquí y no solo con el filtro 'authors' de la suscripción, porque ese
+    lo aplica el relay, que es precisamente de quien se desconfía.
+
+    El id se recalcula a partir de los datos. La firma va sobre el id, así que verificarla
+    sola dejaría pasar un evento con un par (id, firma) auténtico y el contenido
+    sustituido: nada ataría uno a lo otro.
+
+    Y la firma se verifica contra ese id ya comprobado. verify() de coincurve no hashea su
+    argumento, le pasa los 32 bytes a secp256k1_schnorrsig_verify, que es lo que pide
+    NIP-01: la firma es sobre el id, que ya es un sha256.
+
+    Cualquier evento malformado se rechaza sin más. A lo que llega de un relay no se le
+    concede el beneficio de la duda.
+    """
+    try:
+        if evento["pubkey"] != MOSTRO_PUBKEY:
+            return False
+        if evento["id"] != _id_calculado(evento):
+            return False
+        return PublicKeyXOnly(bytes.fromhex(evento["pubkey"])).verify(
+            bytes.fromhex(evento["sig"]), bytes.fromhex(evento["id"])
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def _enlace_de(tags, order_id):
@@ -270,6 +342,26 @@ def pending_de(eventos, ahora=None):
     }
 
 
+def _solo_autenticos(relay, eventos):
+    """Los eventos que el relay devolvió y además firmó nuestro nodo, o None si ninguno.
+
+    Devolver None cuando contestó con eventos y ni uno es válido no es una exquisitez: es
+    el camino que obtener_pending ya sabe tratar como "este relay no ha contestado". Si en
+    vez de eso se devolviera la lista vacía, un MOSTRO_PUBKEY equivocado —o tres relays
+    comprometidos a la vez— harían que obtener_pending viese cero ofertas pending y
+    reconciliar borrase el canal entero. Una lista vacía de verdad, porque no había nada
+    que devolver, sigue siendo una respuesta legítima y se respeta.
+    """
+    autenticos = [e for e in eventos if evento_autentico(e)]
+    descartados = len(eventos) - len(autenticos)
+    if descartados:
+        print(f"⚠️ {relay}: {descartados} de {len(eventos)} eventos con firma inválida")
+    if eventos and not autenticos:
+        print(f"⚠️ {relay}: ninguno válido, lo trato como si no hubiera contestado")
+        return None
+    return autenticos
+
+
 def _consultar(relay, filtro, timeout, max_eventos):
     """Eventos que devuelve un relay para un filtro, o None si no llega el EOSE."""
     ws = None
@@ -282,7 +374,7 @@ def _consultar(relay, filtro, timeout, max_eventos):
             if respuesta[0] == "EVENT":
                 eventos.append(respuesta[2])
             elif respuesta[0] == "EOSE":
-                return eventos
+                return _solo_autenticos(relay, eventos)
         print(f"⚠️ {relay}: demasiados eventos sin EOSE, no me fío del resultado")
         return None
     except Exception as e:
@@ -444,6 +536,12 @@ def conectar_relay(on_message, on_open_extra=None):
         except ValueError:
             return
         if not datos or datos[0] != "EVENT" or len(datos) < 3:
+            return
+        # Antes de es_nuevo, no después: filtro_novedades apunta el id de lo que ve, así
+        # que dejar entrar un evento falso le permitiría envenenar esa memoria y tapar al
+        # auténtico que llegase luego con el mismo id.
+        if not evento_autentico(datos[2]):
+            print(f"⚠️ {getattr(ws, 'url', '?')}: evento con firma inválida, descartado")
             return
         with cerrojo:
             if es_nuevo(datos[2]):
