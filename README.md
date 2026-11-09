@@ -184,13 +184,32 @@ Muestra el estado completo del nodo: servicios activos, versiones instaladas vs 
 
 Consulta todos los datos de una orden en la base de datos de Mostro. Soporta búsqueda por UUID completo o parcial, y modos especiales para listar órdenes recientes, pendientes, en curso o estadísticas generales.
 
-Muestra: tipo, estado, montos (incluyendo fiat final en órdenes con rango), comisiones (fee/routing/dev con totales), participantes (pubkeys), datos Lightning (hash/preimage/invoice), disputas, valoraciones, tiempos (con duración del trade) y trade index.
+Muestra: tipo, estado, montos (incluyendo fiat final en órdenes con rango), comisiones (la fee real de Mostro y su reparto, la dev fee, el routing y el neto estimado), participantes (el creador y los master de comprador y vendedor), datos Lightning (hash/preimage/invoice), disputas, valoraciones, tiempos (con duración del trade) y trade index.
+
+La base de datos guarda solo la mitad de la comisión de Mostro (la otra mitad la paga la otra parte), la `dev_fee` es el 30 % de la comisión entera y `routing_fee` va siempre a 0. Por eso la sección **Comisiones** no suma esos campos: enseña la comisión real, la dev fee con su estado y el coste de routing en sats enteros, leído de `accounting/accounting.db` (que lo calcula con LND), y con ellos el neto estimado. Si la contabilidad aún no sabe cuánto costó el routing, lo dice en vez de poner 0.
 
 Al consultar una orden concreta añade un bloque **Lightning en vivo (LND)** con lo que la base de datos no guarda: el estado real de la hold invoice del vendedor (`ACCEPTED` = fondos bloqueados sin cobrar, `SETTLED` = cobrada, `CANCELED` = devuelta) y, sobre todo, el pago al comprador con el desglose de sus intentos de HTLC agrupados por código de fallo, la comisión de la ruta más cara intentada frente al techo que impone `max_routing_fee`, y un aviso si queda algún HTLC sin resolver —mientras lo haya, LND no cierra el pago y Mostro no puede reintentar—.
 
 El hash que guarda la orden es el de la hold invoice, no el del pago de salida: ese se localiza decodificando la factura del comprador. Por eso `Intentos: 2, Fallidos: 1` en la parte de base de datos no dice nada de la causa, y este bloque sí.
 
 El bloque se omite sin ruido si `lncli` no está disponible. Cuesta ~1 s con la orden resuelta y ~4 s si hay un pago todavía en vuelo; los listados (`--recent`, `--pending`, `--active`, `--stats`) no consultan LND.
+
+**Ese bloque solo mira `lnd1`** (el `lncli` por defecto) y localiza el pago al comprador decodificando su factura, así que no sirve para los pagos hechos desde `lnd2` ni para los de una Lightning Address. Para eso, en las órdenes con la hold invoice liquidada (`settled-hold-invoice` y `success`), `order.sh` añade la sección **Auditoría del pago al comprador**, que hace `tools/pago.py` (más abajo).
+
+### tools/pago.py
+
+Auditoría del pago de Mostro al comprador de una orden: todos los intentos, en `lnd1` y `lnd2`, y qué costó cada salto.
+
+```bash
+python3 tools/pago.py <order_id>          # UUID completo o su principio
+python3 tools/pago.py <order_id> --json   # lo mismo, para otro script
+```
+
+Cada reintento del pago es un pago distinto con su propio hash, y el `Hash` y el `Preimage` que muestra la parte de base de datos de `order.sh` son los de la hold invoice del vendedor, no los del pago de salida. Aquí se enseña, de cada intento: hora, nodo, estado, causa del fallo, hash y, en el que salió, el preimage, la comisión de routing repartida entre lo que cobra la red y lo que se queda en tus nodos, y la ruta salto a salto con el alias y la comisión de cada uno. Al final, lo que la contabilidad guardó de esa orden.
+
+Cómo localiza el pago: por el hash de la factura del comprador si dio una; si dio una Lightning Address no hay hash, y se busca por importe (`amount − fee`, exacto) y fecha, y lo dice. Avisa cuando otras órdenes tienen el mismo importe en esos días (los intentos podrían mezclarse), cuando hay más de un pago completado para una orden (posible doble pago), cuando hay uno en vuelo, cuando la contabilidad no coincide con LND y cuando un nodo no responde o `lnd2` no está configurado. Los criterios están en `lib/auditoria.py`.
+
+Solo lee: la instantánea de Mostro, LND con macaroons de solo lectura y `accounting.db`. Necesita `LND2_TLSCERT` y `LND2_MACAROON` en el `.env`, igual que `accounting.py`.
 
 ```bash
 ./tools/order.sh <order_id>       # Consultar una orden (UUID completo)
@@ -496,6 +515,7 @@ solo para formatear un número.
 | `lib/contabilidad.py` | Consultas de solo lectura sobre `accounting.db` y las ventanas de día y mes en hora local |
 | `lib/lnd.py` | Localiza en LND los pagos de Mostro (lnd1 y lnd2) y reparte su coste entre red y nodos propios |
 | `lib/ganancias.py` | Esquema de `accounting.db`, cálculo del neto y guardado de cada operación |
+| `lib/auditoria.py` | Reconstruye el pago al comprador de una orden con todos sus intentos y lo presenta; lo usa `tools/pago.py` |
 
 `lib/contabilidad.py` es lo que mantiene cuadradas las dos vistas de las mismas cuentas: el
 informe mensual y el bloque diario del resumen usan la misma consulta y el mismo criterio de
@@ -580,8 +600,10 @@ servidor. `run-tests.sh` los encadena y añade una comprobación de sintaxis de 
 │   ├── contabilidad.py     # Consultas sobre accounting.db y ventanas locales
 │   ├── lnd.py              # Pagos de Mostro en LND y reparto de su coste
 │   ├── ganancias.py        # Esquema, neto y guardado de accounting.db
+│   ├── auditoria.py        # Reconstrucción y presentación del pago al comprador
 │   ├── test-lib.py         # Comprobaciones de lib/
-│   └── test-routing.py     # Comprobaciones del cálculo de routing
+│   ├── test-routing.py     # Comprobaciones del cálculo de routing
+│   └── test-auditoria.py   # Comprobaciones de la auditoría del pago
 ├── admin/
 │   ├── env.sh              # Configuración y helpers compartidos (sql_ro, telegram_enviar)
 │   ├── setup.sh            # Asistente de configuración interactivo
@@ -591,6 +613,7 @@ servidor. `run-tests.sh` los encadena y añade una comprobación de sintaxis de 
 │   └── check_channels.sh   # Alerta Telegram si hay demasiados canales LND caídos
 ├── tools/
 │   ├── order.sh            # Consulta de órdenes
+│   ├── pago.py             # Auditoría del pago al comprador (intentos, ruta, comisiones)
 │   ├── user.sh             # Historial y reputación de un usuario
 │   ├── dispute.sh          # Mediación de Serbero: conversación y veredicto
 │   ├── report.sh           # Informe financiero de actividad

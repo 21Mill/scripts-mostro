@@ -120,6 +120,102 @@ format_status() {
     esac
 }
 
+# --- Comisiones de una orden ---
+#
+# Lo que la base guarda en `fee` es solo la mitad de la comisión de Mostro: la otra mitad la
+# paga la otra parte, y la comisión real es el doble. `dev_fee` es el 30 % de esa comisión
+# real y sale de lo que cobra la instancia, no se suma a ella. Sumar los dos campos, como
+# hacía este bloque, daba una cifra que no corresponde a nada. Y `routing_fee` está siempre
+# a 0: el coste del pago al comprador lo calcula accounting.py a partir de LND, y de
+# accounting.db es de donde se lee aquí.
+
+# Milisatoshis a sats enteros, con el mismo redondeo que accounting.py (0,5 sube, también en
+# los negativos: -2500 msat son -2 sats). awk y no $(( )) porque la división entera de bash
+# redondea hacia cero.
+msat_a_sats() {
+    awk -v m="$1" 'BEGIN { v = (m + 500) / 1000; f = int(v); if (f > v) f--; printf "%d", f }'
+}
+
+# Como format_sats, pero un 0 se escribe: aquí "0 sats de routing" es un dato, no ausencia.
+sats_o_cero() {
+    [[ "$1" == "0" ]] && echo "0 sats" || format_sats "$1"
+}
+
+# Args: uuid fee dev_fee dev_fee_paid routing_fee dev_fee_payment_hash
+mostrar_comisiones() {
+    local uuid="$1" fee="${2:-0}" dev_fee="${3:-0}" dev_pagada="$4" routing_db="${5:-0}" dev_hash="$6"
+    local fee_real=$(( fee * 2 ))
+    local acc_db="$SCRIPT_DIR/../accounting/accounting.db"
+    local acc="" rb="" rd="" interno="" neto=""
+
+    # Coste de routing del comprador y de la dev fee, en msat y sin la parte que cobran tus
+    # propios nodos entre sí. Vacío si la contabilidad aún no sabe cuánto fue.
+    if [[ -f "$acc_db" ]]; then
+        acc=$(sql_ro "$acc_db" -separator '|' "SELECT
+                COALESCE(routing_buyer_msat - routing_buyer_interno_msat, routing_buyer * 1000),
+                COALESCE(routing_devs_msat - routing_devs_interno_msat, routing_devs * 1000),
+                COALESCE(routing_buyer_interno_msat, 0) + COALESCE(routing_devs_interno_msat, 0),
+                COALESCE(net_profit_msat, '')
+            FROM earnings WHERE order_id = '${uuid//-/}'")
+    fi
+    IFS='|' read -r rb rd interno neto <<<"$acc"
+
+    echo -e "${BOLD}  ─── Comisiones ───${NC}"
+
+    if [[ "$fee" != "0" ]]; then
+        echo -e "  Fee de Mostro:   $(format_sats "$fee_real")  ${DIM}($(format_sats "$fee") de cada parte)${NC}"
+    fi
+
+    if [[ "$dev_fee" != "0" ]]; then
+        local pct="" estado_dev="${RED}pendiente de pago${NC}${DIM}"
+        [[ "$fee_real" -gt 0 ]] && pct="$(( (dev_fee * 200 + fee_real) / (2 * fee_real) )) % de la fee, "
+        [[ "$dev_pagada" == "1" ]] && estado_dev="${GREEN}pagada${NC}${DIM}"
+        echo -e "  Dev fee:         $(format_sats "$dev_fee")  ${DIM}(${pct}${estado_dev})${NC}"
+    fi
+
+    # El routing se da en sats enteros: los milisatoshis solo importan al sumar muchas
+    # órdenes, y eso lo hace la contabilidad.
+    local routing_sats="" nota=""
+    if [[ -n "$rb" ]]; then
+        routing_sats=$(msat_a_sats $(( rb + ${rd:-0} )))
+        if [[ -n "$rd" && "$dev_fee" != "0" ]]; then
+            nota="pago al comprador y dev fee, según LND"
+        elif [[ -z "$rd" && "$dev_fee" != "0" ]]; then
+            nota="pago al comprador, según LND; el de la dev fee aún no existe"
+        else
+            nota="pago al comprador, según LND"
+        fi
+    elif [[ "$routing_db" != "0" ]]; then
+        routing_sats="$routing_db"
+        nota="según Mostro"
+    fi
+    if [[ -n "$routing_sats" ]]; then
+        echo -e "  Routing:         $(sats_o_cero "$routing_sats")  ${DIM}(${nota})${NC}"
+    else
+        echo -e "  Routing:         ${DIM}sin datos: la contabilidad aún no lo ha calculado${NC}"
+    fi
+
+    if [[ -n "$interno" && "$interno" != "0" ]]; then
+        local interno_sats
+        interno_sats=$(msat_a_sats "$interno")
+        [[ "$interno_sats" != "0" ]] && \
+            echo -e "  Entre tus nodos: $(format_sats "$interno_sats")  ${DIM}(no resta: se queda en tu infraestructura)${NC}"
+    fi
+
+    # Neto: el exacto si la contabilidad ya cerró la operación; si solo falta el coste de la
+    # dev fee, una estimación con lo que se sabe, y se dice.
+    if [[ "$fee" != "0" ]]; then
+        if [[ -n "$neto" ]]; then
+            echo -e "  Neto estimado:   ≈ $(sats_o_cero "$(msat_a_sats "$neto")")"
+        elif [[ -n "$rb" ]]; then
+            local provisional=$(( (fee_real - dev_fee) * 1000 - rb - ${rd:-0} ))
+            echo -e "  Neto estimado:   ≈ $(sats_o_cero "$(msat_a_sats "$provisional")")  ${DIM}(provisional: falta el coste del pago de la dev fee)${NC}"
+        fi
+    fi
+
+    [[ -n "$dev_hash" ]] && echo -e "  Dev hash:        ${DIM}$dev_hash${NC}"
+}
+
 # --- Consulta en vivo a LND ---
 #
 # La base de datos solo guarda contadores: "Intentos: 2, Fallidos: 1" no dice si falta
@@ -839,37 +935,19 @@ while IFS='|' read -r uuid kind status event_id hash preimage \
 
     # --- Comisiones ---
     if [[ ("$fee" != "0" && "$fee" != "") || ("$routing_fee" != "0" && "$routing_fee" != "") || ("$dev_fee" != "0" && "$dev_fee" != "") ]]; then
-        total_fees=$(( ${fee:-0} + ${routing_fee:-0} + ${dev_fee:-0} ))
-        echo -e "${BOLD}  ─── Comisiones ───${NC}"
-        [[ "$fee" != "0" && "$fee" != "" ]] && echo -e "  Fee:         $(format_sats "$fee")"
-        [[ "$routing_fee" != "0" && "$routing_fee" != "" ]] && echo -e "  Routing:     $(format_sats "$routing_fee")"
-        if [[ "$dev_fee" != "0" && "$dev_fee" != "" ]]; then
-            dev_paid_txt="${RED}No${NC}"
-            [[ "$dev_fee_paid" == "1" ]] && dev_paid_txt="${GREEN}Si${NC}"
-            echo -e "  Dev fee:     $(format_sats "$dev_fee") (pagada: $dev_paid_txt)"
-        fi
-        echo -e "  ${DIM}Total:       $(format_sats "$total_fees")${NC}"
-        [[ -n "$dev_fee_payment_hash" && "$dev_fee_payment_hash" != "" ]] && echo -e "  Dev hash:    ${DIM}$dev_fee_payment_hash${NC}"
+        mostrar_comisiones "$uuid" "$fee" "$dev_fee" "$dev_fee_paid" "$routing_fee" "$dev_fee_payment_hash"
         echo ""
     fi
 
     # --- Participantes ---
+    # Solo el creador y los master de comprador y vendedor. Las claves de cada operación
+    # (buyer_pubkey, seller_pubkey) se siguen leyendo para el resto del script, pero aquí no
+    # se enseñan. Un master que falta —el de la parte que no llegó a entrar en una orden
+    # cancelada o pendiente— sale como un guion.
     echo -e "${BOLD}  ─── Participantes ───${NC}"
-    echo -e "  Creador:      $(format_pubkey "$creator_pubkey")"
-    if [[ -n "$buyer_pubkey" && "$buyer_pubkey" != "" ]]; then
-        echo -e "  Comprador:    $(format_pubkey "$buyer_pubkey")"
-        [[ -n "$master_buyer_pubkey" && "$master_buyer_pubkey" != "" ]] && \
-            echo -e "  Master buyer: $(format_pubkey "$master_buyer_pubkey")"
-    else
-        echo -e "  Comprador:    ${DIM}—${NC}"
-    fi
-    if [[ -n "$seller_pubkey" && "$seller_pubkey" != "" ]]; then
-        echo -e "  Vendedor:     $(format_pubkey "$seller_pubkey")"
-        [[ -n "$master_seller_pubkey" && "$master_seller_pubkey" != "" ]] && \
-            echo -e "  Master seller:$(format_pubkey "$master_seller_pubkey")"
-    else
-        echo -e "  Vendedor:     ${DIM}—${NC}"
-    fi
+    echo -e "  Creador:       $(format_pubkey "$creator_pubkey")"
+    echo -e "  Master buyer:  $(format_pubkey "$master_buyer_pubkey")"
+    echo -e "  Master seller: $(format_pubkey "$master_seller_pubkey")"
     echo ""
 
     # --- Lightning ---
@@ -949,7 +1027,7 @@ while IFS='|' read -r uuid kind status event_id hash preimage \
                 else
                     echo -e "  ${BOLD}Pago al comprador${NC}"
                     echo -e "    Importe:   $(format_sats "$pay_monto")"
-                    echo -e "    Estado:    ${DIM}LND no ha iniciado ningun pago con este hash${NC}"
+                    echo -e "    Estado:    ${DIM}no figura en lnd1 (Mostro paga desde lnd2: ver la auditoria de mas abajo)${NC}"
                     echo ""
                 fi
             fi
@@ -961,6 +1039,15 @@ while IFS='|' read -r uuid kind status event_id hash preimage \
             dev_json=$(lnd_pago "$dev_fee_payment_hash")
             [[ -n "$dev_json" ]] && lnd_mostrar_pago "Dev fee" "$dev_json" ""
         fi
+    fi
+
+    # --- Auditoría del pago al comprador ---
+    # Todos los intentos del pago de salida, en lnd1 y lnd2, con su ruta y lo que cobró
+    # cada salto. Lo hace pago.py; el bloque de LND de arriba solo mira lnd1 y no localiza
+    # los pagos a una Lightning Address. </dev/null: este bucle lee de su stdin.
+    if [[ "$status" == "success" || "$status" == "settled-hold-invoice" ]]; then
+        python3 "$SCRIPT_DIR/pago.py" "$uuid" </dev/null \
+            || echo -e "  ${DIM}(no se pudo auditar el pago al comprador)${NC}\n"
     fi
 
     # --- Historial (log de mostrod) ---
