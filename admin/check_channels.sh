@@ -1,9 +1,9 @@
 #!/bin/bash
 # ============================================================================
-# check_channels.sh — Alerta por Telegram si hay más de 2 canales LND caídos
+# check_channels.sh — Alerta por Telegram si hay más de X canales LND caídos
 #
 # Uso:
-#   ./check_channels.sh              # Comprueba y alerta si > 2 canales caídos
+#   ./check_channels.sh              # Comprueba y alerta si > X canales caídos
 #   ./check_channels.sh --status     # Muestra estado sin enviar alerta
 #
 # Cron recomendado (cada 10 minutos):
@@ -13,7 +13,7 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 
-THRESHOLD=2   # Alertar si los canales inactivos superan este número
+THRESHOLD=3   # Alertar si los canales inactivos superan este número
 
 # --- Leer configuración de Telegram desde el config del watchdog ---
 
