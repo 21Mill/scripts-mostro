@@ -184,13 +184,13 @@ Muestra el estado completo del nodo: servicios activos, versiones instaladas vs 
 
 Consulta todos los datos de una orden en la base de datos de Mostro. Soporta búsqueda por UUID completo o parcial, y modos especiales para listar órdenes recientes, pendientes, en curso o estadísticas generales.
 
-Muestra: tipo, estado, montos (incluyendo fiat final en órdenes con rango), comisiones (la fee real de Mostro y su reparto, la dev fee, el routing y el neto estimado), participantes (el creador y los master de comprador y vendedor), datos Lightning (hash/preimage/invoice), disputas, valoraciones, tiempos (con duración del trade) y trade index.
+Muestra: tipo, estado, montos (incluyendo fiat final en órdenes con rango), comisiones (la fee real de Mostro y su reparto, la dev fee, el routing y el neto estimado), participantes (el creador y los master de comprador y vendedor), disputas, valoraciones, tiempos (con duración del trade) y trade index.
 
 La base de datos guarda solo la mitad de la comisión de Mostro (la otra mitad la paga la otra parte), la `dev_fee` es el 30 % de la comisión entera y `routing_fee` va siempre a 0. Por eso la sección **Comisiones** no suma esos campos: enseña la comisión real, la dev fee con su estado y el coste de routing en sats enteros, leído de `accounting/accounting.db` (que lo calcula con LND), y con ellos el neto estimado. Si la contabilidad aún no sabe cuánto costó el routing, lo dice en vez de poner 0.
 
 Al consultar una orden concreta añade un bloque **Lightning en vivo (LND)** con lo que la base de datos no guarda: el estado real de la hold invoice del vendedor (`ACCEPTED` = fondos bloqueados sin cobrar, `SETTLED` = cobrada, `CANCELED` = devuelta) y, sobre todo, el pago al comprador con el desglose de sus intentos de HTLC agrupados por código de fallo, la comisión de la ruta más cara intentada frente al techo que impone `max_routing_fee`, y un aviso si queda algún HTLC sin resolver —mientras lo haya, LND no cierra el pago y Mostro no puede reintentar—.
 
-El hash que guarda la orden es el de la hold invoice, no el del pago de salida: ese se localiza decodificando la factura del comprador. Por eso `Intentos: 2, Fallidos: 1` en la parte de base de datos no dice nada de la causa, y este bloque sí.
+`order.sh` no muestra el `hash` ni el `preimage` que guarda la orden, ni la factura del comprador ni los contadores `payment_attempts` y `failed_payment`: el hash y el preimage son los de la hold invoice del vendedor (el pago que **recibe** Mostro), no los del pago de salida, y juntos en una sección se confundían con él. `failed_payment` solo vale 0 o 1 y `payment_attempts` no es el número real de intentos. El estado de la hold invoice sale en este bloque, y el pago al comprador, con todos sus intentos, en la auditoría de más abajo.
 
 El bloque se omite sin ruido si `lncli` no está disponible. Cuesta ~1 s con la orden resuelta y ~4 s si hay un pago todavía en vuelo; los listados (`--recent`, `--pending`, `--active`, `--stats`) no consultan LND.
 
@@ -205,7 +205,7 @@ python3 tools/pago.py <order_id>          # UUID completo o su principio
 python3 tools/pago.py <order_id> --json   # lo mismo, para otro script
 ```
 
-Cada reintento del pago es un pago distinto con su propio hash, y el `Hash` y el `Preimage` que muestra la parte de base de datos de `order.sh` son los de la hold invoice del vendedor, no los del pago de salida. Aquí se enseña, de cada intento: hora, nodo, estado, causa del fallo, hash y, en el que salió, el preimage, la comisión de routing repartida entre lo que cobra la red y lo que se queda en tus nodos, y la ruta salto a salto con el alias y la comisión de cada uno. Al final, lo que la contabilidad guardó de esa orden.
+Cada reintento del pago es un pago distinto con su propio hash, y el `hash` que guarda la orden es el de la hold invoice del vendedor, no el del pago de salida. Aquí se enseña, de cada intento: hora, nodo, estado, causa del fallo, hash y, en el que salió, el preimage, la comisión de routing repartida entre lo que cobra la red y lo que se queda en tus nodos, y la ruta salto a salto con el alias y la comisión de cada uno. Al final, lo que la contabilidad guardó de esa orden.
 
 Cómo localiza el pago: por el hash de la factura del comprador si dio una; si dio una Lightning Address no hay hash, y se busca por importe (`amount − fee`, exacto) y fecha, y lo dice. Avisa cuando otras órdenes tienen el mismo importe en esos días (los intentos podrían mezclarse), cuando hay más de un pago completado para una orden (posible doble pago), cuando hay uno en vuelo, cuando la contabilidad no coincide con LND y cuando un nodo no responde o `lnd2` no está configurado. Los criterios están en `lib/auditoria.py`.
 

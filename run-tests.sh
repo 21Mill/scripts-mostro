@@ -25,11 +25,18 @@ ejecutar() {
 
 ejecutar lib test-lib.py
 ejecutar lib test-routing.py
+ejecutar lib test-auditoria.py
 ejecutar accounting test-accounting.py
 ejecutar bot test-reconciliacion.py
 ejecutar bot test-resumen.py
 ejecutar bot test-formato.py
 ejecutar bot test-firma.py
+
+echo "── tools/test-comisiones.sh ──"
+if ! bash "$REPO/tools/test-comisiones.sh"; then
+    fallos=$((fallos + 1))
+fi
+echo
 
 # Comprobación de sintaxis: barata y atrapa el error más tonto antes de reiniciar un
 # servicio en producción.

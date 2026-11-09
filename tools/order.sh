@@ -950,22 +950,11 @@ while IFS='|' read -r uuid kind status event_id hash preimage \
     echo -e "  Master seller: $(format_pubkey "$master_seller_pubkey")"
     echo ""
 
-    # --- Lightning ---
-    if [[ (-n "$hash" && "$hash" != "") || (-n "$preimage" && "$preimage" != "") || (-n "$buyer_invoice" && "$buyer_invoice" != "") ]]; then
-        echo -e "${BOLD}  ─── Lightning ───${NC}"
-        [[ -n "$hash" && "$hash" != "" ]] && echo -e "  Hash:        ${DIM}$hash${NC}"
-        [[ -n "$preimage" && "$preimage" != "" ]] && echo -e "  Preimage:    ${DIM}$preimage${NC}"
-        if [[ -n "$buyer_invoice" && "$buyer_invoice" != "" ]]; then
-            echo -e "  Invoice:     ${DIM}${buyer_invoice:0:50}...${NC}"
-        fi
-        if [[ "$payment_attempts" != "0" && "$payment_attempts" != "" ]]; then
-            echo -e "  Intentos:    $payment_attempts"
-        fi
-        if [[ "$failed_payment" != "0" && "$failed_payment" != "" ]]; then
-            echo -e "  Fallidos:    ${RED}$failed_payment${NC}"
-        fi
-        echo ""
-    fi
+    # No hay sección con los datos Lightning de la base (hash, preimage, factura, intentos):
+    # mezclaba el pago que recibe Mostro (hash y preimage son de la hold invoice del vendedor)
+    # con el que envía (la factura y los contadores), y los contadores no son el número real
+    # de intentos. Lo de LND está más abajo, y el pago al comprador, con todos sus intentos,
+    # en la auditoría.
 
     # --- Lightning en vivo (LND) ---
     if [[ (-n "$hash" && "$hash" != "") || (-n "$buyer_invoice" && "$buyer_invoice" != "") ]] \
