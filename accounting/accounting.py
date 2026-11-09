@@ -1,17 +1,22 @@
 """
 accounting.py — Contabilidad de ganancias de NostroMostro.
 
-Sondea mostro.db cada 60s buscando órdenes completadas (status='success'),
-calcula el beneficio neto real usando LND para routing fees, guarda en
-accounting.db (SQLite) y notifica al operador por Telegram privado.
+Sondea la instantánea de mostro.db cada 60s buscando órdenes completadas (status='success'),
+averigua en LND lo que costó pagar al comprador y la comisión de desarrollo, guarda el
+beneficio en accounting.db (SQLite) y notifica al operador por Telegram privado.
 
-Beneficio = (fee × 2) - dev_fee - routing_buyer - routing_devs
+Beneficio = (fee × 2) - dev_fee - routing que cobró la red (comprador + devs)
+
+Mostro paga desde lnd2 y enruta por lnd1, así que se consultan los dos (lib/lnd.py). Lo que
+cobran tus propios nodos entre sí se guarda aparte y no resta: no sale de tu bolsillo.
+
+Lo que LND aún no permite averiguar —un pago que no aparece, una comisión de desarrollo
+sin pagar— queda 'pendiente' y se reintenta cada 10 minutos durante 30 días. Antes se daba
+por 0, y un 0 inventado no se distingue de uno real.
 """
 
-import json
 import os
 import sqlite3
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -19,7 +24,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.entorno import cargar_env
-from lib.formato import formato_sats
+from lib.formato import formato_msat, formato_sats
+from lib.ganancias import (
+    caducar_pendientes, guardar_resolucion, hash_asignado, hashes_usados, ids_a_reintentar,
+    ids_procesados, migrar_esquema, neto_provisional_msat, redondear_sats, totales,
+)
+from lib.lnd import (
+    MARGEN_ANTES_SEGUNDOS, ErrorLnd, cargar_nodos, destino_de, hash_de_factura, listar_pagos,
+    pubkey_de, resolver_orden,
+)
 from lib.telegram import enviar
 
 # ---------------------------------------------------------------------------
@@ -36,10 +49,8 @@ MOSTRO_DB = os.getenv("MOSTRO_DB_RO", "/var/lib/mostro-snapshot/mostro.db")
 
 ACCOUNTING_DB = Path(__file__).parent / "accounting.db"
 POLL_INTERVAL = 60  # segundos
-
-# Caché incremental de pagos LND: {payment_hash: fee_sat}
-_lnd_cache: dict = {}
-_lnd_last_fetch: int = 0  # epoch del último fetch
+REINTENTO_SEGUNDOS = 600  # cada cuánto se revisan las pendientes
+MAX_REINTENTO_DIAS = 30  # pasado esto, una pendiente se da por perdida
 
 # ---------------------------------------------------------------------------
 # DB contabilidad
@@ -63,140 +74,79 @@ def init_db():
         )
     """)
     con.commit()
+    migrar_esquema(con)
     return con
-
-
-def get_processed_ids(con):
-    rows = con.execute("SELECT order_id FROM earnings").fetchall()
-    return {r[0] for r in rows}
-
-
-def insert_earning(con, order_id, completed_at, amount, fiat_code, fiat_amount,
-                   fee, dev_fee, routing_buyer, routing_devs):
-    real_fee = fee * 2  # Mostro registra solo el 50% de la fee real
-    net = None
-    if routing_buyer is not None and routing_devs is not None:
-        net = real_fee - dev_fee - routing_buyer - routing_devs
-    con.execute("""
-        INSERT OR IGNORE INTO earnings
-          (order_id, completed_at, amount, fiat_code, fiat_amount,
-           fee, dev_fee, routing_buyer, routing_devs, net_profit, notified_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (order_id, completed_at, amount, fiat_code, fiat_amount,
-          real_fee, dev_fee, routing_buyer, routing_devs, net, int(time.time())))
-    con.commit()
-    return net
-
-
-def get_totals(con):
-    row = con.execute(
-        "SELECT COALESCE(SUM(net_profit), 0), COUNT(*) FROM earnings WHERE net_profit IS NOT NULL"
-    ).fetchone()
-    return row[0], row[1]
 
 # ---------------------------------------------------------------------------
 # Mostro DB
 # ---------------------------------------------------------------------------
 
-def query_mostro(sql):
-    result = subprocess.run(
-        ["sqlite3", "-readonly", "-separator", "|", MOSTRO_DB, sql],
-        capture_output=True, timeout=30
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"sqlite3 error: {result.stderr.decode('utf-8', errors='replace').strip()}")
-    return result.stdout.decode("utf-8", errors="replace").strip()
-
-
-def get_success_orders(processed_ids):
+def leer_ordenes():
+    """Todas las órdenes completadas, como diccionarios."""
     # id es un BLOB binario en Mostro — usamos lower(hex(id)) para obtener el UUID legible
-    sql = (
-        "SELECT lower(hex(id)), amount, fee, dev_fee, dev_fee_payment_hash, "
-        "buyer_invoice, fiat_code, fiat_amount, taken_at "
-        "FROM orders WHERE status='success';"
-    )
-    output = query_mostro(sql)
-    if not output:
-        return []
-
-    orders = []
-    for line in output.splitlines():
-        parts = line.split("|")
-        if len(parts) < 9:
-            continue
-        order_id = parts[0]
-        if order_id in processed_ids:
-            continue
-        try:
-            orders.append({
-                "id": order_id,
-                "amount": int(parts[1] or 0),
-                "fee": int(parts[2] or 0),
-                "dev_fee": int(parts[3] or 0),
-                "dev_fee_hash": parts[4],
-                "buyer_invoice": parts[5],
-                "fiat_code": parts[6],
-                "fiat_amount": int(parts[7] or 0),
-                "taken_at": int(parts[8] or 0),
-            })
-        except (ValueError, IndexError):
-            pass
-    return orders
-
-# ---------------------------------------------------------------------------
-# LND — caché incremental
-# ---------------------------------------------------------------------------
-
-def refresh_lnd_cache(full=False):
-    """
-    Actualiza _lnd_cache con pagos SUCCEEDED de LND.
-    full=True: trae todos los pagos (primer arranque, ~30s).
-    full=False: solo pagos desde el último fetch (ciclos normales, <1s).
-    """
-    global _lnd_cache, _lnd_last_fetch
-
-    cmd = ["lncli", "listpayments"]
-    if full:
-        cmd += ["--max_payments=10000"]
-    else:
-        since = max(0, _lnd_last_fetch - 120)  # margen de 2 min
-        cmd += [f"--creation_date_start={since}"]
-
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-    if result.returncode != 0:
-        raise RuntimeError(f"lncli error: {result.stderr.strip()}")
-
-    data = json.loads(result.stdout)
-    added = 0
-    for p in data.get("payments", []):
-        if p.get("status") == "SUCCEEDED":
-            h = p["payment_hash"]
-            if h not in _lnd_cache:
-                _lnd_cache[h] = int(p.get("fee_sat", 0))
-                added += 1
-
-    _lnd_last_fetch = int(time.time())
-    return added
-
-
-def get_lnd_fee(payment_hash):
-    return _lnd_cache.get(payment_hash)
-
-
-def decode_invoice_hash(bolt11):
-    """Decodifica un bolt11 y devuelve su payment_hash, o None si falla."""
-    if not bolt11:
-        return None
-    result = subprocess.run(
-        ["lncli", "decodepayreq", bolt11],
-        capture_output=True, text=True, timeout=15
-    )
-    if result.returncode != 0:
-        return None
+    con = sqlite3.connect(f"file:{MOSTRO_DB}?mode=ro", uri=True, timeout=30)
     try:
-        return json.loads(result.stdout).get("payment_hash")
-    except (json.JSONDecodeError, AttributeError):
-        return None
+        filas = con.execute(
+            "SELECT lower(hex(id)), amount, fee, dev_fee, dev_fee_payment_hash, "
+            "buyer_invoice, fiat_code, fiat_amount, taken_at "
+            "FROM orders WHERE status='success'"
+        ).fetchall()
+    finally:
+        con.close()
+
+    ordenes = []
+    for id_, amount, fee, dev_fee, dev_hash, factura, fiat_code, fiat_amount, taken_at in filas:
+        ordenes.append({
+            "id": id_,
+            "amount": int(amount or 0),
+            "fee": int(fee or 0),
+            "dev_fee": int(dev_fee or 0),
+            "dev_fee_hash": dev_hash or "",
+            "buyer_invoice": factura or "",
+            "fiat_code": fiat_code,
+            "fiat_amount": int(fiat_amount or 0),
+            "taken_at": int(taken_at or 0),
+            "destino": destino_de(factura),
+            "hash_comprador": None,
+        })
+    return ordenes
+
+# ---------------------------------------------------------------------------
+# LND
+# ---------------------------------------------------------------------------
+
+def preparar(orden, nodo):
+    """Si el comprador dio una factura, averigua su payment_hash. Si no se puede, queda None
+    y la orden se reintenta: un fallo de lncli no es motivo para buscarla por importe."""
+    if orden["destino"] != "bolt11":
+        return
+    try:
+        orden["hash_comprador"] = hash_de_factura(nodo, orden["buyer_invoice"])
+    except ErrorLnd as e:
+        print(f"⚠️  No se pudo decodificar la factura de {orden['id'][:8]}: {e}")
+
+
+def cargar_pagos(nodos, desde, hasta):
+    """Pagos completados de todos los nodos en la ventana, y los nodos que no respondieron."""
+    pagos = []
+    caidos = []
+    for nodo in nodos:
+        try:
+            pagos += listar_pagos(nodo, desde, hasta)
+        except ErrorLnd as e:
+            caidos.append(nodo.nombre)
+            print(f"⚠️  {e}")
+    return pagos, caidos
+
+
+def pubkeys_propias(nodos):
+    propias = set()
+    for nodo in nodos:
+        try:
+            propias.add(pubkey_de(nodo))
+        except ErrorLnd as e:
+            print(f"⚠️  No se pudo leer la identidad de {nodo.nombre}: {e}")
+    return propias
 
 # ---------------------------------------------------------------------------
 # Telegram
@@ -209,35 +159,48 @@ def send_telegram(msg):
     return enviar(TELEGRAM_TOKEN, CHAT_ID, msg, timeout=10, reintentos=1) is not None
 
 
-def build_message(order, net_profit, routing_buyer, routing_devs, total_sats, total_trades):
-    fee = order["fee"]
-    dev_fee = order["dev_fee"]
-    amount = order["amount"]
-    fiat = order["fiat_code"]
-    fiat_amount = order["fiat_amount"]
+def _externo(par):
+    return None if par is None else par[0] - par[1]
 
-    routing_total = (routing_buyer or 0) + (routing_devs or 0)
 
-    if routing_buyer is None or routing_devs is None:
-        routing_txt = "⚡ <b>Routing:</b>      N/D (reintentando...)"
-        net_txt = "✅ <b>Ganancia neta:</b> N/D"
+def build_message(orden, res, neto_msat, total_msat, total_trades):
+    fee_real = orden["fee"] * 2
+    comprador, devs = res["comprador"], res["devs"]
+
+    if comprador is None and devs is None:
+        routing_txt = "⚡ <b>Routing:</b>      N/D (se reintentará)"
     else:
-        routing_txt = (
-            f"⚡ <b>Routing:</b>      {formato_sats(routing_total)} sats"
-            f"  (comprador: {routing_buyer} / devs: {routing_devs})"
+        externo = (_externo(comprador) or 0) + (_externo(devs) or 0)
+        detalle = (
+            f"comprador: {formato_msat(_externo(comprador)) if comprador else 'N/D'}"
+            f" / devs: {formato_msat(_externo(devs)) if devs else 'N/D'}"
         )
-        net_txt = f"✅ <b>Ganancia neta:</b> {formato_sats(net_profit)} sats"
+        routing_txt = f"⚡ <b>Routing:</b>      {formato_msat(externo)} sats  ({detalle})"
+        interno = (comprador[1] if comprador else 0) + (devs[1] if devs else 0)
+        if interno:
+            routing_txt += f"\n🏠 <b>Entre tus nodos:</b> {formato_msat(interno)} sats (no resta)"
+
+    if neto_msat is not None:
+        net_txt = f"✅ <b>Ganancia neta:</b> {formato_msat(neto_msat)} sats"
+    else:
+        provisional = neto_provisional_msat(fee_real, orden["dev_fee"], comprador, devs)
+        net_txt = (
+            f"✅ <b>Ganancia neta:</b> ≈ {formato_msat(provisional)} sats"
+            f"  <i>(provisional: {res['motivo']})</i>"
+        )
 
     acum_txt = (
-        f"📈 <b>Acumulado:</b>   {formato_sats(total_sats)} sats  ({total_trades} trades)"
+        f"📈 <b>Acumulado:</b>   {formato_sats(redondear_sats(total_msat))} sats"
+        f"  ({total_trades} trades)"
     )
 
     return "\n".join([
         "💰 <b>Operación completada</b>",
         "",
-        f"💵 <b>Volumen:</b>      {formato_sats(amount)} sats  •  {fiat_amount:,} {fiat}",
-        f"📊 <b>Fee cobrado:</b>  {formato_sats(fee * 2)} sats",
-        f"👨‍💻 <b>Dev fee:</b>     {formato_sats(dev_fee)} sats",
+        f"💵 <b>Volumen:</b>      {formato_sats(orden['amount'])} sats"
+        f"  •  {orden['fiat_amount']:,} {orden['fiat_code']}",
+        f"📊 <b>Fee cobrado:</b>  {formato_sats(fee_real)} sats",
+        f"👨‍💻 <b>Dev fee:</b>     {formato_sats(orden['dev_fee'])} sats",
         routing_txt,
         "━━━━━━━━━━━━━━━━━━━━━",
         net_txt,
@@ -249,62 +212,60 @@ def build_message(order, net_profit, routing_buyer, routing_devs, total_sats, to
 # Ciclo principal
 # ---------------------------------------------------------------------------
 
-def process_cycle(con, first_run=False):
-    processed_ids = get_processed_ids(con)
+def procesar_ciclo(con, nodos, propias, ahora, reintentar):
+    caducar_pendientes(con, ahora, MAX_REINTENTO_DIAS)
 
     try:
-        new_orders = get_success_orders(processed_ids)
-    except RuntimeError as e:
+        todas = leer_ordenes()
+    except sqlite3.Error as e:
         print(f"❌ Error consultando Mostro DB: {e}")
         return
 
-    if not new_orders:
-        print(f"✓ Sin órdenes nuevas ({len(processed_ids)} procesadas)")
+    hechas = ids_procesados(con)
+    por_id = {o["id"]: o for o in todas}
+    nuevas = [o for o in todas if o["id"] not in hechas]
+    reintentos = [por_id[i] for i in ids_a_reintentar(con) if i in por_id] if reintentar else []
+    trabajo = nuevas + reintentos
+
+    if not trabajo:
+        print(f"✓ Sin órdenes nuevas ni pendientes ({len(hechas)} procesadas)")
         return
 
-    print(f"🔍 {len(new_orders)} orden(es) nueva(s) completada(s)")
+    print(f"🔍 {len(nuevas)} orden(es) nueva(s), {len(reintentos)} pendiente(s) por revisar")
 
-    # Actualizar caché LND (incremental en ciclos normales)
-    try:
-        added = refresh_lnd_cache(full=first_run)
-        print(f"⚡ Caché LND: {len(_lnd_cache)} pagos totales (+{added} nuevos)")
-    except RuntimeError as e:
-        print(f"⚠️  No se pudo actualizar caché LND: {e}")
+    for orden in trabajo:
+        preparar(orden, nodos[0])
 
-    for order in new_orders:
-        order_id = order["id"]
-        print(f"📦 Procesando orden {order_id[:8]}...")
+    desde = min(o["taken_at"] for o in trabajo) - MARGEN_ANTES_SEGUNDOS
+    pagos, caidos = cargar_pagos(nodos, desde, ahora)
+    if len(caidos) == len(nodos):
+        # Sin ningún nodo no se averigua nada: mejor esperar al siguiente ciclo que guardar
+        # una operación entera como pendiente y avisar con todo a N/D.
+        print("⚠️  Ningún nodo respondió; se reintenta en el próximo ciclo")
+        return
+    por_hash = {p["payment_hash"]: p for p in pagos}
+    usados = hashes_usados(con)
 
-        # Routing fee del pago al comprador (decodificar invoice → payment_hash)
-        buyer_hash = decode_invoice_hash(order["buyer_invoice"])
-        if buyer_hash:
-            routing_buyer = get_lnd_fee(buyer_hash)
-            if routing_buyer is None:
-                # Invoice expirada o pago no encontrado: asumir 0
-                routing_buyer = 0
-        else:
-            routing_buyer = 0
+    for orden in trabajo:
+        es_nueva = orden["id"] not in hechas
+        # Una pendiente que ya tenía su pago asignado puede volver a encontrarlo.
+        propio = hash_asignado(con, orden["id"])
+        res = resolver_orden(orden, por_hash, pagos, propias, usados - {propio})
+        if res["hash_comprador"]:
+            usados.add(res["hash_comprador"])
 
-        # Routing fee del pago a devs
-        dev_hash = order["dev_fee_hash"]
-        routing_devs = get_lnd_fee(dev_hash) if dev_hash else 0
-        if routing_devs is None:
-            routing_devs = 0
+        neto = guardar_resolucion(con, orden, res, ahora)
 
-        net = insert_earning(
-            con, order_id, order["taken_at"], order["amount"],
-            order["fiat_code"], order["fiat_amount"],
-            order["fee"], order["dev_fee"], routing_buyer, routing_devs
-        )
-
-        total_sats, total_trades = get_totals(con)
-        msg = build_message(order, net, routing_buyer, routing_devs, total_sats, total_trades)
-        if send_telegram(msg):
-            print(f"✅ Notificado: {order_id[:8]}... ganancia={net} sats")
-        else:
-            print(f"⚠️  Telegram falló para {order_id[:8]}...")
-
-        time.sleep(0.5)  # evitar rate limit de Telegram (30 msg/s)
+        if es_nueva:
+            total_msat, total_trades = totales(con)
+            msg = build_message(orden, res, neto, total_msat, total_trades)
+            if send_telegram(msg):
+                print(f"✅ Notificado: {orden['id'][:8]}... estado={res['estado']}")
+            else:
+                print(f"⚠️  Telegram falló para {orden['id'][:8]}...")
+            time.sleep(0.5)  # evitar rate limit de Telegram (30 msg/s)
+        elif res["estado"] == "ok":
+            print(f"🧾 Resuelta la pendiente {orden['id'][:8]}...")
 
 
 def main():
@@ -313,19 +274,28 @@ def main():
     print(f"📡 Mostro DB: {MOSTRO_DB}")
 
     con = init_db()
-    already = len(get_processed_ids(con))
-    print(f"📋 Órdenes ya procesadas: {already}")
+    print(f"📋 Órdenes ya procesadas: {len(ids_procesados(con))}")
 
-    first_run = True
-    if first_run:
-        print("⏳ Primer arranque: cargando historial completo de LND (~30s)...")
+    nodos = cargar_nodos(os.environ)
+    print(f"⚡ Nodos consultados: {', '.join(n.nombre for n in nodos)}")
+    if len(nodos) < 2:
+        print("⚠️  lnd2 no está configurado (LND2_TLSCERT y LND2_MACAROON): los pagos que haga "
+              "Mostro desde lnd2 quedarán pendientes en vez de contarse")
 
+    propias = set()
+    ultimo_reintento = 0
     while True:
         try:
-            process_cycle(con, first_run=first_run)
+            if not propias:
+                propias = pubkeys_propias(nodos)
+            ahora = int(time.time())
+            reintentar = ahora - ultimo_reintento >= REINTENTO_SEGUNDOS
+            if propias:
+                procesar_ciclo(con, nodos, propias, ahora, reintentar)
+                if reintentar:
+                    ultimo_reintento = ahora
         except Exception as e:
             print(f"❌ Error en ciclo: {e}")
-        first_run = False
         time.sleep(POLL_INTERVAL)
 
 

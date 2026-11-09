@@ -205,6 +205,11 @@ def bloque_cuentas(fecha, cuentas, precio):
             f"   Dev fee:  −{formato_sats(dia['dev_fee'])} sats",
             f"   Routing:  −{formato_sats(dia['routing'])} sats",
         ]
+        # .get: los datos de días sin migrar, o de tests, no traen estas claves.
+        if dia.get("routing_interno"):
+            lineas.append(f"   Entre tus nodos:  {formato_sats(dia['routing_interno'])} sats (no resta)")
+        if dia.get("pendientes"):
+            lineas.append(f"   ⚠️ {dia['pendientes']} operación(es) con el coste de routing sin cerrar (neto provisional)")
 
     acumulado = f"{MESES[fecha.month - 1].capitalize()} hasta hoy"
     lineas.append(

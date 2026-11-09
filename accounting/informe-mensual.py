@@ -106,6 +106,10 @@ def construir_mensaje(anio, mes, datos, previo, precio):
             f"   Dev fee:  −{formato_sats(datos['dev_fee'])} sats",
             f"   Routing:  −{formato_sats(datos['routing'])} sats",
         ]
+        if datos.get("routing_interno"):
+            lineas.append(f"   Entre tus nodos:  {formato_sats(datos['routing_interno'])} sats (no resta)")
+        if datos.get("pendientes"):
+            lineas.append(f"   ⚠️ {datos['pendientes']} operación(es) con el coste de routing sin cerrar (neto provisional)")
 
     prev_anio, prev_mes = mes_anterior(anio, mes)
     if previo is not None:
