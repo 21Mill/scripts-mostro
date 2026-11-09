@@ -15,3 +15,5 @@ informe-mensual-enviado.json
 *.db
 *.db-wal
 *.db-shm
+# accounting.db.pre-routing-<fecha>, mostro.db.pre-...
+*.db.*

@@ -155,7 +155,7 @@ Tras instalar:
 Comprueba el número de canales LND inactivos y envía una alerta por Telegram (al mismo canal que el watchdog) si se supera el umbral. Usa el `bot_token` y `chat_id` del archivo de configuración del watchdog (`/opt/mostro/config.toml`), sin necesidad de configuración adicional.
 
 ```bash
-./admin/check_channels.sh            # Comprueba y alerta si > 2 canales caídos
+./admin/check_channels.sh            # Comprueba y alerta si se supera el umbral (variable THRESHOLD del script)
 ./admin/check_channels.sh --status   # Muestra estado sin enviar alerta
 ```
 
@@ -281,19 +281,68 @@ Monitoriza una transacción Bitcoin hasta su confirmación y notifica por Telegr
 Servicio de contabilidad. Sondea la instantánea cada 60 s buscando órdenes que pasan a `success`, calcula el **beneficio neto real** y avisa por Telegram al chat privado, operación a operación.
 
 ```
-neto = (fee × 2) − dev_fee − routing_comprador − routing_devs
+neto = (fee × 2) − dev_fee − routing_comprador − routing_devs     (solo lo que cobra la red)
 ```
 
-El `× 2` no es un error: Mostro registra en la base solo el 50 % de la comisión real. Las
-comisiones de routing se sacan de LND (`lncli listpayments`), casando el
-`payment_hash` de la invoice del comprador y el del pago a los desarrolladores; se
-mantienen en una caché incremental para no releer todo el historial en cada ciclo.
+El `× 2` no es un error: Mostro registra en la base solo el 50 % de la comisión real.
+
+**Cómo se averigua el routing** (`lib/lnd.py`):
+
+- Se consultan todos los nodos desde los que Mostro paga: `lnd1` con el `lncli` por defecto y
+  `lnd2` si están `LND2_TLSCERT` y `LND2_MACAROON`. Sin `lnd2` configurado, los pagos hechos
+  desde él quedan pendientes en vez de contarse como 0.
+- El pago al comprador se localiza por el `payment_hash` de su factura. Si dio una Lightning
+  Address no hay factura que decodificar: se busca por importe (`amount − fee`, que coincide
+  exactamente) y fecha. Con varios candidatos que cuestan distinto no se elige ninguno; si
+  cuestan lo mismo, da igual cuál sea.
+- El pago de la comisión de desarrollo se localiza por su `payment_hash`. Se paga unos segundos
+  después de liquidar, o días después si el servidor de la Fundación no responde, así que la
+  operación se actualiza cuando aparece, sin segundo aviso.
+- Todo se guarda en milisatoshis: `fee_sat` de LND trunca, y con comisiones de pocos sats el
+  error sería del tamaño del dato. Los totales redondean una sola vez, al final.
+- Cada pago se descompone por saltos: lo que cobran tus propios nodos entre sí se guarda
+  como coste **interno**, se muestra aparte y no resta del neto; lo que cobra la red sí.
+- Lo que no se puede averiguar queda `pendiente` y se reintenta cada 10 minutos durante
+  30 días. Nunca se da por 0. Una pendiente cuyo coste de comprador ya se conoce cuenta en el
+  neto como provisional (solo le falta ~1 sat de la comisión de desarrollo), y los informes
+  avisan de cuántas son.
 
 Guarda una fila por operación en `accounting/accounting.db`, que no se versiona.
 
 ```bash
 python3 accounting/accounting.py     # normalmente vía mostro-accounting.service
 ```
+
+**Acceso de solo lectura a lnd2.** El usuario que ejecuta el servicio no puede leer `/data/lnd2`.
+Se crea un macaroon que solo lee pagos e información y se copia el certificado (es público):
+
+```bash
+mkdir -p ~/.lnd2-ro && chmod 700 ~/.lnd2-ro
+sudo -u lnd2 lncli --lnddir=/data/lnd2 --rpcserver=127.0.0.1:10010 \
+  bakemacaroon offchain:read info:read --save_to=/tmp/lnd2-ro.macaroon
+sudo install -o admin -g admin -m 600 /tmp/lnd2-ro.macaroon ~/.lnd2-ro/readonly.macaroon
+sudo rm /tmp/lnd2-ro.macaroon
+sudo install -o admin -g admin -m 644 /data/lnd2/tls.cert ~/.lnd2-ro/tls.cert
+```
+
+Y en el `.env`: `LND2_TLSCERT=/home/admin/.lnd2-ro/tls.cert` y
+`LND2_MACAROON=/home/admin/.lnd2-ro/readonly.macaroon`.
+
+### accounting/migrar-routing.py
+
+Recalcula con datos de LND el routing de las operaciones ya contabilizadas, con las reglas
+de arriba. Por defecto solo **simula**: enseña, mes a mes, el neto y el routing antes y ahora, y
+cuántas operaciones quedan sin resolver, sin escribir nada.
+
+```bash
+python3 accounting/migrar-routing.py             # simulación
+sudo systemctl stop mostro-accounting            # antes de aplicar: escribiría a la vez
+python3 accounting/migrar-routing.py --aplicar   # copia accounting.db.pre-routing-<fecha> y escribe
+sudo systemctl start mostro-accounting
+```
+
+Es repetible. Una fila que no se pueda resolver y tenga menos de 30 días queda `pendiente`; una
+de más de 30 días conserva sus valores antiguos, marcada `sin_datos`.
 
 ### accounting/informe-mensual.py
 
@@ -440,10 +489,12 @@ solo para formatear un número.
 | Módulo | Contiene |
 |--------|----------|
 | `lib/entorno.py` | Localiza y carga el `.env`, siempre por ruta absoluta |
-| `lib/formato.py` | Cifras y fechas con las convenciones españolas (`formato_sats`, `formato_euros`, `con_signo`, `fecha_larga`) |
+| `lib/formato.py` | Cifras y fechas con las convenciones españolas (`formato_sats`, `formato_msat`, `formato_euros`, `con_signo`, `fecha_larga`) |
 | `lib/estado.py` | Persistencia en JSON del estado de cada script |
 | `lib/telegram.py` | Envío y borrado de mensajes, y lectura de credenciales de un `config.toml` |
 | `lib/contabilidad.py` | Consultas de solo lectura sobre `accounting.db` y las ventanas de día y mes en hora local |
+| `lib/lnd.py` | Localiza en LND los pagos de Mostro (lnd1 y lnd2) y reparte su coste entre red y nodos propios |
+| `lib/ganancias.py` | Esquema de `accounting.db`, cálculo del neto y guardado de cada operación |
 
 `lib/contabilidad.py` es lo que mantiene cuadradas las dos vistas de las mismas cuentas: el
 informe mensual y el bloque diario del resumen usan la misma consulta y el mismo criterio de
@@ -526,14 +577,17 @@ servidor. `run-tests.sh` los encadena y añade una comprobación de sintaxis de 
 │   ├── estado.py           # Persistencia JSON
 │   ├── telegram.py         # Envío por Telegram
 │   ├── contabilidad.py     # Consultas sobre accounting.db y ventanas locales
-│   └── test-lib.py         # Comprobaciones de lib/
+│   ├── lnd.py              # Pagos de Mostro en LND y reparto de su coste
+│   ├── ganancias.py        # Esquema, neto y guardado de accounting.db
+│   ├── test-lib.py         # Comprobaciones de lib/
+│   └── test-routing.py     # Comprobaciones del cálculo de routing
 ├── admin/
 │   ├── env.sh              # Configuración y helpers compartidos (sql_ro, telegram_enviar)
 │   ├── setup.sh            # Asistente de configuración interactivo
 │   ├── status.sh           # Estado del nodo
 │   ├── update.sh           # Actualización de componentes (GPG+SHA256, backup BD, rollback)
 │   ├── rollback.sh         # Rollback de componentes
-│   └── check_channels.sh   # Alerta Telegram si >2 canales LND caídos
+│   └── check_channels.sh   # Alerta Telegram si hay demasiados canales LND caídos
 ├── tools/
 │   ├── order.sh            # Consulta de órdenes
 │   ├── user.sh             # Historial y reputación de un usuario
@@ -543,6 +597,7 @@ servidor. `run-tests.sh` los encadena y añade una comprobación de sintaxis de 
 │   └── monitor.sh          # Monitor de transacciones BTC
 ├── accounting/
 │   ├── accounting.py       # Contabilidad en tiempo real (servicio)
+│   ├── migrar-routing.py   # Recalcula el routing del histórico (simula por defecto)
 │   └── informe-mensual.py  # Informe financiero mensual
 ├── bot/
 │   ├── premiums.sh         # Generador de datos para GitHub Pages
