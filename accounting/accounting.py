@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.entorno import cargar_env
-from lib.formato import formato_msat, formato_sats
+from lib.formato import formato_msat, formato_sats, uuid_de_hex
 from lib.ganancias import (
     caducar_pendientes, guardar_resolucion, hash_asignado, hashes_usados, ids_a_reintentar,
     ids_procesados, migrar_esquema, neto_provisional_msat, redondear_sats, totales,
@@ -197,6 +197,8 @@ def build_message(orden, res, neto_msat, total_msat, total_trades):
     return "\n".join([
         "💰 <b>Operación completada</b>",
         "",
+        # <code> hace que Telegram lo copie con un toque.
+        f"🆔 <b>Orden:</b>  <code>{uuid_de_hex(orden['id'])}</code>",
         f"💵 <b>Volumen:</b>      {formato_sats(orden['amount'])} sats"
         f"  •  {orden['fiat_amount']:,} {orden['fiat_code']}",
         f"📊 <b>Fee cobrado:</b>  {formato_sats(fee_real)} sats",

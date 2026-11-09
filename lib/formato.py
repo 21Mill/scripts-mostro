@@ -33,6 +33,19 @@ def formato_sats(valor):
         return valor
 
 
+def uuid_de_hex(texto):
+    """'33b61a7f97414e1aa9df5735181da549' -> '33b61a7f-9741-4e1a-a9df-5735181da549'.
+
+    La base de Mostro guarda el id como BLOB y accounting.py lo lee con hex(id), de modo que
+    llega sin guiones. Con ellos es el UUID que Mostro enseña a los usuarios y que esperan
+    tools/order.sh y el resto de herramientas. Si no tiene forma de UUID se devuelve tal cual.
+    """
+    limpio = str(texto).replace("-", "").lower()
+    if len(limpio) != 32 or any(c not in "0123456789abcdef" for c in limpio):
+        return texto
+    return f"{limpio[:8]}-{limpio[8:12]}-{limpio[12:16]}-{limpio[16:20]}-{limpio[20:]}"
+
+
 def formato_msat(msat):
     """15845 -> '15,845'; 421570 -> '421,57'; 1000 -> '1'; -2500 -> '−2,5'.
 

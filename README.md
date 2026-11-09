@@ -278,7 +278,8 @@ Monitoriza una transacción Bitcoin hasta su confirmación y notifica por Telegr
 
 ### accounting/accounting.py
 
-Servicio de contabilidad. Sondea la instantánea cada 60 s buscando órdenes que pasan a `success`, calcula el **beneficio neto real** y avisa por Telegram al chat privado, operación a operación.
+Servicio de contabilidad. Sondea la instantánea cada 60 s buscando órdenes que pasan a `success`, calcula el **beneficio neto real** y avisa por Telegram al chat privado, operación a operación. El aviso
+lleva el id de la orden como UUID dentro de `<code>`, para copiarlo con un toque.
 
 ```
 neto = (fee × 2) − dev_fee − routing_comprador − routing_devs     (solo lo que cobra la red)

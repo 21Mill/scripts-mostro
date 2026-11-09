@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.contabilidad import rango_dia, rango_mes
 from lib.estado import cargar_estado, guardar_estado
-from lib.formato import con_signo, fecha_larga, formato_euros, formato_sats
+from lib.formato import con_signo, fecha_larga, formato_euros, formato_sats, uuid_de_hex
 from lib.telegram import credenciales_de_toml
 
 fallos = []
@@ -53,6 +53,17 @@ comprobar("el cero no lleva signo", con_signo(0), "0")
 # sacaría el mes en inglés dentro de un informe que sí está en español.
 comprobar("fecha larga en castellano", fecha_larga(date(2026, 8, 12)), "12 de agosto")
 comprobar("sin cero a la izquierda en el día", fecha_larga(date(2026, 1, 3)), "3 de enero")
+
+# El id llega de hex(id) sin guiones; con ellos es el UUID que ven los usuarios y que
+# esperan las herramientas de consulta.
+comprobar("un id sin guiones se muestra como UUID",
+          uuid_de_hex("33b61a7f97414e1aa9df5735181da549"), "33b61a7f-9741-4e1a-a9df-5735181da549")
+comprobar("un UUID que ya lo es no cambia",
+          uuid_de_hex("33b61a7f-9741-4e1a-a9df-5735181da549"), "33b61a7f-9741-4e1a-a9df-5735181da549")
+comprobar("y las mayúsculas se normalizan",
+          uuid_de_hex("33B61A7F97414E1AA9DF5735181DA549"), "33b61a7f-9741-4e1a-a9df-5735181da549")
+comprobar("algo que no es un id se devuelve intacto", uuid_de_hex("no-soy-un-id"), "no-soy-un-id")
+comprobar("y None también", uuid_de_hex(None), None)
 
 
 print("\ncontabilidad · ventanas\n")

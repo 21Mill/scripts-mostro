@@ -25,6 +25,7 @@ ejecutar() {
 
 ejecutar lib test-lib.py
 ejecutar lib test-routing.py
+ejecutar accounting test-accounting.py
 ejecutar bot test-reconciliacion.py
 ejecutar bot test-resumen.py
 ejecutar bot test-formato.py
