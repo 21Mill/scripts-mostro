@@ -67,7 +67,10 @@ def cargar_nodos(entorno):
 
 def _lncli(nodo, *args, timeout=120):
     try:
-        r = subprocess.run([*nodo.args, *args], capture_output=True, text=True, timeout=timeout)
+        # stdin cerrado: order.sh llama a esto dentro de un 'while read' y un proceso que
+        # heredara su stdin podría tragarse las líneas que quedan por leer.
+        r = subprocess.run([*nodo.args, *args], capture_output=True, text=True, timeout=timeout,
+                           stdin=subprocess.DEVNULL)
     except (subprocess.TimeoutExpired, OSError) as e:
         raise ErrorLnd(f"{nodo.nombre}: {e}") from e
     if r.returncode != 0:
@@ -82,20 +85,33 @@ def pubkey_de(nodo):
     return _lncli(nodo, "getinfo", timeout=30)["identity_pubkey"]
 
 
-def listar_pagos(nodo, desde, hasta):
-    """Pagos completados creados entre dos epochs. Una consulta por ventana, sin caché.
+def listar_pagos(nodo, desde, hasta, incompletos=False):
+    """Pagos creados entre dos epochs: solo los completados, o todos con incompletos=True.
 
-    La caché incremental anterior pedía solo lo creado desde la última consulta, y un pago
-    que seguía en vuelo en ese momento no se volvía a pedir cuando terminaba.
+    Una consulta por ventana, sin caché. La caché incremental anterior pedía solo lo creado
+    desde la última consulta, y un pago que seguía en vuelo en ese momento no se volvía a
+    pedir cuando terminaba. La contabilidad solo necesita los completados; la auditoría de
+    un pago necesita también los fallidos y los que siguen en vuelo.
     """
-    datos = _lncli(
-        nodo, "listpayments",
+    args = [
+        "listpayments",
         f"--creation_date_start={int(desde)}",
         f"--creation_date_end={int(hasta)}",
         "--max_payments=100000",
-        timeout=180,
-    )
-    return [p for p in datos.get("payments", []) if p.get("status") == "SUCCEEDED"]
+    ]
+    if incompletos:
+        args.append("--include_incomplete")
+    datos = _lncli(nodo, *args, timeout=180)
+    pagos = datos.get("payments", [])
+    return pagos if incompletos else [p for p in pagos if p.get("status") == "SUCCEEDED"]
+
+
+def alias_de(nodo, pubkey):
+    """Alias público de un nodo según el grafo de `nodo`, o None si no lo hay."""
+    try:
+        return _lncli(nodo, "getnodeinfo", pubkey, timeout=20)["node"].get("alias") or None
+    except (ErrorLnd, KeyError):
+        return None
 
 
 def hash_de_factura(nodo, bolt11):

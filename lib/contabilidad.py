@@ -52,6 +52,35 @@ def _tiene_msat(con):
     return "net_profit_msat" in {fila[1] for fila in con.execute("PRAGMA table_info(earnings)")}
 
 
+def fila_de_orden(con, order_id):
+    """Lo que la contabilidad guardó de una orden, o None si aún no la ha contabilizado.
+
+    Acepta el UUID con o sin guiones. En msat; las filas anteriores a las columnas nuevas
+    traen sus sats enteros multiplicados por 1000 y estado None.
+    """
+    clave = str(order_id).replace("-", "").lower()
+    if _tiene_msat(con):
+        fila = con.execute(
+            "SELECT routing_estado, routing_buyer_msat, routing_buyer_interno_msat, "
+            "routing_devs_msat, routing_devs_interno_msat, net_profit_msat, routing_motivo "
+            "FROM earnings WHERE order_id = ?", (clave,),
+        ).fetchone()
+        if not fila:
+            return None
+        return {"estado": fila[0], "comprador_msat": fila[1], "comprador_interno_msat": fila[2],
+                "devs_msat": fila[3], "devs_interno_msat": fila[4], "neto_msat": fila[5],
+                "motivo": fila[6]}
+    fila = con.execute(
+        "SELECT routing_buyer, routing_devs, net_profit FROM earnings WHERE order_id = ?", (clave,)
+    ).fetchone()
+    if not fila:
+        return None
+    por_mil = lambda v: None if v is None else v * 1000
+    return {"estado": None, "comprador_msat": por_mil(fila[0]), "comprador_interno_msat": 0,
+            "devs_msat": por_mil(fila[1]), "devs_interno_msat": 0, "neto_msat": por_mil(fila[2]),
+            "motivo": None}
+
+
 def consultar(con, inicio, fin):
     """Agregados de las operaciones liquidadas en [inicio, fin), epochs.
 
