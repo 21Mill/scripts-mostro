@@ -12,6 +12,8 @@ en la ventana que le pasan a consultar().
 import sqlite3
 from datetime import datetime, timedelta
 
+from lib.ganancias import SQL_NETO_MSAT, redondear_sats
+
 
 def abrir(ruta):
     """Conexión de solo lectura. Falla si el fichero no existe, en vez de crearlo vacío."""
@@ -46,20 +48,50 @@ def rango_dia(fecha):
     return int(inicio.timestamp()), int(fin.timestamp())
 
 
+def _tiene_msat(con):
+    return "net_profit_msat" in {fila[1] for fila in con.execute("PRAGMA table_info(earnings)")}
+
+
 def consultar(con, inicio, fin):
-    """Agregados de las operaciones liquidadas en [inicio, fin), epochs."""
+    """Agregados de las operaciones liquidadas en [inicio, fin), epochs.
+
+    Suma en milisatoshis y redondea una sola vez al final, de modo que el total del mes no
+    arrastra el error de redondear cada operación. Las filas anteriores a las columnas en
+    msat entran con sus sats enteros, así que el histórico no se pierde si aún no se ha
+    recalculado.
+
+    routing es lo que cobró la red; routing_interno, lo que cobraron tus propios nodos
+    entre sí (no sale de tu bolsillo, por eso no está en routing ni en el neto).
+    pendientes cuenta las operaciones cuyo coste aún no se ha podido averiguar: su neto no
+    entra en la suma, y conviene que quien lea el informe lo sepa.
+    """
     # completed_at guarda en realidad el taken_at de la orden: el momento en que se tomó,
     # no en el que se liquidó. La diferencia son minutos y solo importaría para una
     # operación a caballo entre dos periodos. Se deja así porque cambiar el criterio
     # reasignaría de mes operaciones ya notificadas en su día.
+    if _tiene_msat(con):
+        neto = SQL_NETO_MSAT
+        comprador = "COALESCE(routing_buyer_msat - routing_buyer_interno_msat, routing_buyer * 1000)"
+        devs = "COALESCE(routing_devs_msat - routing_devs_interno_msat, routing_devs * 1000)"
+        interno = "COALESCE(routing_buyer_interno_msat, 0) + COALESCE(routing_devs_interno_msat, 0)"
+        pendiente = "CASE WHEN routing_estado IN ('pendiente', 'ambiguo', 'sin_datos') THEN 1 ELSE 0 END"
+    else:
+        neto = "net_profit * 1000"
+        comprador = "routing_buyer * 1000"
+        devs = "routing_devs * 1000"
+        interno = "0"
+        pendiente = "0"
+
     fila = con.execute(
-        """
+        f"""
         SELECT COUNT(*),
-               COALESCE(SUM(net_profit), 0),
+               COALESCE(SUM({neto}), 0),
                COALESCE(SUM(fee), 0),
                COALESCE(SUM(dev_fee), 0),
-               COALESCE(SUM(routing_buyer + routing_devs), 0),
-               COALESCE(SUM(amount), 0)
+               COALESCE(SUM(COALESCE({comprador}, 0) + COALESCE({devs}, 0)), 0),
+               COALESCE(SUM({interno}), 0),
+               COALESCE(SUM(amount), 0),
+               COALESCE(SUM({pendiente}), 0)
         FROM earnings
         WHERE completed_at >= ? AND completed_at < ?
         """,
@@ -67,9 +99,11 @@ def consultar(con, inicio, fin):
     ).fetchone()
     return {
         "operaciones": fila[0],
-        "neto": fila[1],
+        "neto": redondear_sats(fila[1]),
         "fee": fila[2],
         "dev_fee": fila[3],
-        "routing": fila[4],
-        "volumen": fila[5],
+        "routing": redondear_sats(fila[4]),
+        "routing_interno": redondear_sats(fila[5]),
+        "volumen": fila[6],
+        "pendientes": fila[7],
     }

@@ -33,6 +33,24 @@ def formato_sats(valor):
         return valor
 
 
+def formato_msat(msat):
+    """15845 -> '15,845'; 421570 -> '421,57'; 1000 -> '1'; -2500 -> '−2,5'.
+
+    Sats con los decimales que haya, hasta tres. Es lo que permite ver que un pago costó
+    15,845 sats y no 15. Devuelve el valor tal cual si no es un número, como formato_sats.
+    """
+    try:
+        msat = int(msat)
+    except (ValueError, TypeError):
+        return msat
+    signo = "−" if msat < 0 else ""
+    sats, resto = divmod(abs(msat), 1000)
+    texto = formato_sats(sats)
+    if resto:
+        texto += "," + f"{resto:03d}".rstrip("0")
+    return signo + texto
+
+
 def formato_euros(valor):
     """5.938 -> '5,94'. Miles con punto y decimales con coma."""
     return f"{valor:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
