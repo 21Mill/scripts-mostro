@@ -65,6 +65,46 @@ comprobar("el coste entre tus nodos se enseña aparte",
           "Entre tus nodos" in accounting.build_message(orden, interno, 1, 1, 1), True)
 comprobar("y no sale cuando es 0", "Entre tus nodos" in msg, False)
 
+print("\nruta del pago al comprador\n")
+
+PUB_DESTINO = "022b9b71e705ccd4aabbccddeeff00112233445566778899aabbccddeeff0011"
+ruta_ej = [[
+    {"pub": "03aa", "alias": "NostroMostro", "fee_msat": 0, "propio": True, "destino": False},
+    {"pub": "03bb", "alias": "xmrk reloaded", "fee_msat": 10_941, "propio": False, "destino": False},
+    {"pub": "03cc", "alias": "LNServer_Wave", "fee_msat": 92_589, "propio": False, "destino": False},
+    {"pub": PUB_DESTINO, "alias": "", "fee_msat": 0, "propio": False, "destino": True},
+]]
+ok_ruta = {"comprador": (103_530, 0), "devs": (0, 0), "estado": "ok", "motivo": ""}
+msg = accounting.build_message(orden, ok_ruta, 1, 1, 1, ruta=ruta_ej)
+lineas = msg.splitlines()
+comprobar("lleva el título de la ruta", "🛣️ <b>Ruta al comprador:</b>" in lineas, True)
+comprobar("el salto propio, con su marca", any("NostroMostro" in l and "0 msat (tuyo)" in l for l in lineas), True)
+comprobar("un salto intermedio, en msat con puntos", any("xmrk reloaded" in l and "10.941 msat" in l for l in lineas), True)
+comprobar("otro salto intermedio", any("LNServer_Wave" in l and "92.589 msat" in l for l in lineas), True)
+comprobar("sin alias, la clave pública abreviada y la marca de destino",
+          any("022b9b71e705ccd4…" in l and "0 msat (destino)" in l for l in lineas), True)
+comprobar("el total de fees, redondeado al sat más cercano (103,53 → 104)", "Fees pagadas:</b>   104 sats" in msg, True)
+comprobar("los saltos van numerados en orden", [l.strip()[:2] for l in lineas if l.strip()[:2] in ("1.", "2.", "3.", "4.")],
+          ["1.", "2.", "3.", "4."])
+comprobar("la ruta va antes de la ganancia neta", msg.index("Ruta al comprador") < msg.index("Ganancia neta"), True)
+
+malicioso = [[{"pub": "03dd", "alias": "<b>x</b> & co", "fee_msat": 5, "propio": False, "destino": True}]]
+msg = accounting.build_message(orden, ok_ruta, 1, 1, 1, ruta=malicioso)
+comprobar("el alias se escapa para el HTML de Telegram", "&lt;b&gt;x&lt;/b&gt; &amp; co" in msg, True)
+
+dos = ruta_ej + [[{"pub": "03ee", "alias": "Otro", "fee_msat": 1_000, "propio": False, "destino": True}]]
+msg = accounting.build_message(orden, ok_ruta, 1, 1, 1, ruta=dos)
+comprobar("pago en varias partes: Ruta 1/2", "Ruta 1/2" in msg, True)
+comprobar("pago en varias partes: Ruta 2/2", "Ruta 2/2" in msg, True)
+comprobar("y un solo total", msg.count("Fees pagadas"), 1)
+
+sin = accounting.build_message(orden, ok_ruta, 1, 1, 1)
+comprobar("sin ruta no sale la sección", "Ruta al comprador" in sin or "Fees pagadas" in sin, False)
+sin_comprador = accounting.build_message(orden, {"comprador": None, "devs": (0, 0), "estado": "pendiente", "motivo": "x"},
+                                         None, 1, 1, ruta=ruta_ej)
+comprobar("sin pago al comprador conocido tampoco", "Ruta al comprador" in sin_comprador, False)
+comprobar("con ruta=[] tampoco", "Ruta al comprador" in accounting.build_message(orden, ok_ruta, 1, 1, 1, ruta=[]), False)
+
 print()
 if fallos:
     print(f"{len(fallos)} prueba(s) fallida(s)")

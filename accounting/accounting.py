@@ -15,6 +15,7 @@ sin pagar— queda 'pendiente' y se reintenta cada 10 minutos durante 30 días. 
 por 0, y un 0 inventado no se distingue de uno real.
 """
 
+import html
 import os
 import sqlite3
 import sys
@@ -23,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from lib.auditoria import describir_intento
 from lib.entorno import cargar_env
 from lib.formato import formato_sats, uuid_de_hex
 from lib.ganancias import (
@@ -30,8 +32,8 @@ from lib.ganancias import (
     ids_procesados, migrar_esquema, neto_provisional_msat, redondear_sats, totales,
 )
 from lib.lnd import (
-    MARGEN_ANTES_SEGUNDOS, ErrorLnd, cargar_nodos, destino_de, hash_de_factura, listar_pagos,
-    pubkey_de, resolver_orden,
+    MARGEN_ANTES_SEGUNDOS, ErrorLnd, alias_de, cargar_nodos, destino_de, hash_de_factura,
+    listar_pagos, pubkey_de, resolver_orden,
 )
 from lib.telegram import enviar
 
@@ -170,7 +172,27 @@ def _sats(msat):
     return ("−" if sats < 0 else "") + formato_sats(abs(sats))
 
 
-def build_message(orden, res, neto_msat, total_msat, total_trades):
+def _texto_ruta(rutas, total_msat):
+    """Líneas del aviso con la ruta del pago al comprador y el total de fees pagadas.
+
+    `rutas` son las que devuelve describir_intento (una por cada parte del pago). Cada salto va
+    en msat, como en la auditoría de order.sh; el total, en sats redondeados como el resto del
+    aviso. El alias es texto libre de la red y el mensaje va en HTML, así que se escapa.
+    """
+    lineas = ["🛣️ <b>Ruta al comprador:</b>"]
+    for n, ruta in enumerate(rutas, 1):
+        if len(rutas) > 1:
+            lineas.append(f"   Ruta {n}/{len(rutas)}:")
+        for k, salto in enumerate(ruta, 1):
+            nombre = html.escape(salto["alias"] or (salto["pub"][:16] + "…"))
+            marcas = [m for m, activa in (("tuyo", salto["propio"]), ("destino", salto["destino"])) if activa]
+            etiqueta = f" ({', '.join(marcas)})" if marcas else ""
+            lineas.append(f"   {k}. {nombre}  {formato_sats(salto['fee_msat'])} msat{etiqueta}")
+    lineas.append(f"💸 <b>Fees pagadas:</b>   {_sats(total_msat)} sats")
+    return lineas
+
+
+def build_message(orden, res, neto_msat, total_msat, total_trades, ruta=None):
     fee_real = orden["fee"] * 2
     comprador, devs = res["comprador"], res["devs"]
 
@@ -201,6 +223,8 @@ def build_message(orden, res, neto_msat, total_msat, total_trades):
         f"  ({total_trades} trades)"
     )
 
+    ruta_txt = _texto_ruta(ruta, comprador[0]) if ruta and comprador else []
+
     return "\n".join([
         "💰 <b>Operación completada</b>",
         "",
@@ -211,6 +235,7 @@ def build_message(orden, res, neto_msat, total_msat, total_trades):
         f"📊 <b>Fee cobrado:</b>  {formato_sats(fee_real)} sats",
         f"👨‍💻 <b>Dev fee:</b>     {formato_sats(orden['dev_fee'])} sats",
         routing_txt,
+        *ruta_txt,
         "━━━━━━━━━━━━━━━━━━━━━",
         net_txt,
         "",
@@ -220,6 +245,32 @@ def build_message(orden, res, neto_msat, total_msat, total_trades):
 # ---------------------------------------------------------------------------
 # Ciclo principal
 # ---------------------------------------------------------------------------
+
+_ALIAS = {}
+
+
+def _ruta_del_comprador(res, por_hash, nodos, propias):
+    """Ruta(s) del pago al comprador para el aviso, o None si no se pueden obtener.
+
+    Es un adorno: cualquier fallo (el pago no está, lncli no contesta...) deja el aviso sin la
+    sección en vez de retrasarlo o impedirlo. Los alias se guardan: no cambian y cada consulta
+    a LND puede tardar hasta 20 s.
+    """
+    try:
+        pago = por_hash.get(res["hash_comprador"]) if res["hash_comprador"] else None
+        if pago is None:
+            return None
+
+        def alias(pub):
+            if pub not in _ALIAS:
+                _ALIAS[pub] = alias_de(nodos[0], pub)
+            return _ALIAS[pub]
+
+        return describir_intento(nodos[0].nombre, pago, propias, alias)["rutas"] or None
+    except Exception as e:
+        print(f"⚠️  No se pudo obtener la ruta del pago al comprador: {e}")
+        return None
+
 
 def procesar_ciclo(con, nodos, propias, ahora, reintentar):
     caducar_pendientes(con, ahora, MAX_REINTENTO_DIAS)
@@ -267,7 +318,8 @@ def procesar_ciclo(con, nodos, propias, ahora, reintentar):
 
         if es_nueva:
             total_msat, total_trades = totales(con)
-            msg = build_message(orden, res, neto, total_msat, total_trades)
+            ruta = _ruta_del_comprador(res, por_hash, nodos, propias)
+            msg = build_message(orden, res, neto, total_msat, total_trades, ruta=ruta)
             if send_telegram(msg):
                 print(f"✅ Notificado: {orden['id'][:8]}... estado={res['estado']}")
             else:
