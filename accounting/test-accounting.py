@@ -41,11 +41,24 @@ comprobar("como UUID con guiones, no en hexadecimal corrido", ID_HEX in msg, Fal
 comprobar("y una sola vez", msg.count(ID_UUID), 1)
 comprobar("el id sale justo debajo del título",
           msg.splitlines()[2].startswith("🆔"), True)
-comprobar("con el neto exacto cuando se conoce todo", "Ganancia neta:</b> 493,142 sats" in msg, True)
+comprobar("con el neto redondeado al sat cuando se conoce todo", "Ganancia neta:</b> 493 sats" in msg, True)
+comprobar("sin decimales en el neto", "493,142" in msg, False)
+comprobar("el routing sale redondeado, total y desglose",
+          "Routing:</b>      17 sats  (comprador: 16 / devs: 1)" in msg, True)
 
 msg = accounting.build_message(orden, pendiente, None, 493_142, 1)
 comprobar("con una operación pendiente también lleva el id", f"<code>{ID_UUID}</code>" in msg, True)
 comprobar("y marca el neto como provisional", "provisional" in msg, True)
+
+redondeo = accounting.build_message(orden, {"comprador": (15499, 0), "devs": (500, 0), "estado": "ok", "motivo": ""},
+                                     -2_500, 1_999_500, 2)
+comprobar("por debajo de medio sat baja", "comprador: 15 /" in redondeo, True)
+comprobar("medio sat exacto sube", "devs: 1)" in redondeo, True)
+comprobar("el neto negativo se redondea con el menos tipográfico", "Ganancia neta:</b> −2 sats" in redondeo, True)
+comprobar("sin coma decimal en ninguna cifra de sats", ",5" in redondeo or ",4" in redondeo, False)
+
+provisional = accounting.build_message(orden, pendiente, None, 493_142, 1)
+comprobar("el neto provisional también va redondeado", "≈ " in provisional and "," not in provisional.split("≈ ")[1].split(" sats")[0], True)
 
 interno = {"comprador": (3000, 1500), "devs": (0, 0), "estado": "ok", "motivo": ""}
 comprobar("el coste entre tus nodos se enseña aparte",

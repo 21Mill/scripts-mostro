@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.entorno import cargar_env
-from lib.formato import formato_msat, formato_sats, uuid_de_hex
+from lib.formato import formato_sats, uuid_de_hex
 from lib.ganancias import (
     caducar_pendientes, guardar_resolucion, hash_asignado, hashes_usados, ids_a_reintentar,
     ids_procesados, migrar_esquema, neto_provisional_msat, redondear_sats, totales,
@@ -163,6 +163,13 @@ def _externo(par):
     return None if par is None else par[0] - par[1]
 
 
+def _sats(msat):
+    """msat -> sats enteros para Telegram ('16', '−2'). Las cuentas siguen en msat; esto es solo
+    presentación. Menos tipográfico, como en el resto del desglose."""
+    sats = redondear_sats(msat)
+    return ("−" if sats < 0 else "") + formato_sats(abs(sats))
+
+
 def build_message(orden, res, neto_msat, total_msat, total_trades):
     fee_real = orden["fee"] * 2
     comprador, devs = res["comprador"], res["devs"]
@@ -172,20 +179,20 @@ def build_message(orden, res, neto_msat, total_msat, total_trades):
     else:
         externo = (_externo(comprador) or 0) + (_externo(devs) or 0)
         detalle = (
-            f"comprador: {formato_msat(_externo(comprador)) if comprador else 'N/D'}"
-            f" / devs: {formato_msat(_externo(devs)) if devs else 'N/D'}"
+            f"comprador: {_sats(_externo(comprador)) if comprador else 'N/D'}"
+            f" / devs: {_sats(_externo(devs)) if devs else 'N/D'}"
         )
-        routing_txt = f"⚡ <b>Routing:</b>      {formato_msat(externo)} sats  ({detalle})"
+        routing_txt = f"⚡ <b>Routing:</b>      {_sats(externo)} sats  ({detalle})"
         interno = (comprador[1] if comprador else 0) + (devs[1] if devs else 0)
         if interno:
-            routing_txt += f"\n🏠 <b>Entre tus nodos:</b> {formato_msat(interno)} sats (no resta)"
+            routing_txt += f"\n🏠 <b>Entre tus nodos:</b> {_sats(interno)} sats (no resta)"
 
     if neto_msat is not None:
-        net_txt = f"✅ <b>Ganancia neta:</b> {formato_msat(neto_msat)} sats"
+        net_txt = f"✅ <b>Ganancia neta:</b> {_sats(neto_msat)} sats"
     else:
         provisional = neto_provisional_msat(fee_real, orden["dev_fee"], comprador, devs)
         net_txt = (
-            f"✅ <b>Ganancia neta:</b> ≈ {formato_msat(provisional)} sats"
+            f"✅ <b>Ganancia neta:</b> ≈ {_sats(provisional)} sats"
             f"  <i>(provisional: {res['motivo']})</i>"
         )
 
