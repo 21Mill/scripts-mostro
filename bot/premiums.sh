@@ -182,15 +182,20 @@ echo "$(date '+%Y-%m-%d %H:%M:%S') - JSON generado: $trades_30d trades en 30d, B
 
 # --- Push a GitHub ---
 cd "$WEB_REPO"
-git pull --rebase --quiet 2>/dev/null || true
 git add data/premiums.json
 if git diff --cached --quiet; then
     echo "Sin cambios, no se hace push"
 else
     git commit -m "Update premiums data ($NOW)" --quiet
-    # Un push fallido (GitHub caído, sin red) no debe abortar el script bajo 'set -e':
+    # Integrar el remoto DESPUES de commitear: con el arbol limpio el rebase funciona.
+    # (Antes el pull se hacia con el JSON sin commitear, el rebase fallaba en silencio y,
+    # cuando el remoto tuvo un commit ajeno, todos los push se rechazaban.)
+    # Un fallo de red o de push no debe abortar el script bajo set -e:
     # el resumen de Telegram se intenta igualmente.
-    if git push --quiet 2>&1; then
+    if ! git pull --rebase --quiet 2>&1; then
+        git rebase --abort 2>/dev/null || true
+        echo "Aviso: pull --rebase fallido, no se hace push"
+    elif git push --quiet 2>&1; then
         echo "Push completado"
     else
         echo "Aviso: push fallido, el JSON local sí se ha generado"
