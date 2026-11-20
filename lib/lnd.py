@@ -42,23 +42,30 @@ class Nodo:
         self.args = list(args)
 
 
+def _args_lncli(entorno, prefijo, servidor_por_defecto):
+    """Argumentos de lncli para un nodo con certificado y macaroon propios, o None si faltan."""
+    cert = entorno.get(f"{prefijo}_TLSCERT")
+    macaroon = entorno.get(f"{prefijo}_MACAROON")
+    if not (cert and macaroon):
+        return None
+    servidor = entorno.get(f"{prefijo}_RPCSERVER") or servidor_por_defecto
+    return ["lncli", f"--rpcserver={servidor}", f"--tlscertpath={cert}", f"--macaroonpath={macaroon}"]
+
+
 def cargar_nodos(entorno):
     """lnd1 siempre; lnd2 solo si su certificado y su macaroon de lectura están configurados.
+
+    lnd1 usa lncli con sus rutas por defecto (~/.lnd, es decir, el macaroon admin) salvo que
+    LND1_TLSCERT y LND1_MACAROON apunten a un macaroon de solo lectura, que es lo que debe
+    usar el usuario mostrobot.
 
     Sin lnd2 los pagos hechos desde él quedan pendientes en vez de contarse como 0, que es
     justo lo que pasaba al seguir consultando solo a lnd1 después de migrar Mostro.
     """
-    nodos = [Nodo("lnd1", ["lncli"])]
-    cert = entorno.get("LND2_TLSCERT")
-    macaroon = entorno.get("LND2_MACAROON")
-    if cert and macaroon:
-        servidor = entorno.get("LND2_RPCSERVER") or "127.0.0.1:10010"
-        nodos.append(Nodo("lnd2", [
-            "lncli",
-            f"--rpcserver={servidor}",
-            f"--tlscertpath={cert}",
-            f"--macaroonpath={macaroon}",
-        ]))
+    nodos = [Nodo("lnd1", _args_lncli(entorno, "LND1", "127.0.0.1:10009") or ["lncli"])]
+    args_lnd2 = _args_lncli(entorno, "LND2", "127.0.0.1:10010")
+    if args_lnd2:
+        nodos.append(Nodo("lnd2", args_lnd2))
     return nodos
 
 

@@ -232,6 +232,16 @@ comprobar("y apuntando a su certificado y macaroon",
           ("--tlscertpath=/c/tls.cert" in con_lnd2[1].args, "--macaroonpath=/c/ro.macaroon" in con_lnd2[1].args),
           (True, True))
 comprobar("un certificado sin macaroon no basta", len(cargar_nodos({"LND2_TLSCERT": "/c/tls.cert"})), 1)
+comprobar("sin configurar lnd1 se usa lncli con sus rutas por defecto", cargar_nodos({})[0].args, ["lncli"])
+con_lnd1 = cargar_nodos({"LND1_TLSCERT": "/l1/tls.cert", "LND1_MACAROON": "/l1/ro.macaroon"})
+comprobar("con certificado y macaroon lnd1 usa el puerto por defecto, su certificado y su macaroon",
+          con_lnd1[0].args,
+          ["lncli", "--rpcserver=127.0.0.1:10009", "--tlscertpath=/l1/tls.cert", "--macaroonpath=/l1/ro.macaroon"])
+comprobar("lnd1 respeta LND1_RPCSERVER",
+          "--rpcserver=10.0.0.1:10009" in cargar_nodos({"LND1_TLSCERT": "/a", "LND1_MACAROON": "/b",
+                                                        "LND1_RPCSERVER": "10.0.0.1:10009"})[0].args, True)
+comprobar("un certificado de lnd1 sin macaroon no basta",
+          cargar_nodos({"LND1_TLSCERT": "/l1/tls.cert"})[0].args, ["lncli"])
 
 
 print("\nbase de datos\n")
