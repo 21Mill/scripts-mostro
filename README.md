@@ -184,7 +184,7 @@ Muestra el estado completo del nodo: servicios activos, versiones instaladas vs 
 
 Consulta todos los datos de una orden en la base de datos de Mostro. Soporta búsqueda por UUID completo o parcial, y modos especiales para listar órdenes recientes, pendientes, en curso o estadísticas generales.
 
-Muestra: tipo, estado, montos (incluyendo fiat final en órdenes con rango), comisiones (la fee real de Mostro y su reparto, la dev fee, el routing y el neto estimado), participantes (el creador y los master de comprador y vendedor), disputas, valoraciones, tiempos (con duración del trade) y trade index.
+Muestra: tipo, estado, montos (incluyendo fiat final en órdenes con rango), comisiones (la fee real de Mostro y su reparto, la dev fee, el routing y el neto estimado), participantes (el creador y los master de comprador y vendedor), disputas, valoraciones (con la nota que puso cada parte, leída del log), tiempos (con duración del trade) y trade index. El historial se reconstruye del log de mostrod: el actual, el rotado (`mostro.log.1`) y `mostro.log.2.gz`; una orden más antigua no tiene historial.
 
 La base de datos guarda solo la mitad de la comisión de Mostro (la otra mitad la paga la otra parte), la `dev_fee` es el 30 % de la comisión entera y `routing_fee` va siempre a 0. Por eso la sección **Comisiones** no suma esos campos: enseña la comisión real, la dev fee con su estado y el coste de routing en sats enteros, leído de `accounting/accounting.db` (que lo calcula con LND), y con ellos el neto estimado. Si la contabilidad aún no sabe cuánto costó el routing, lo dice en vez de poner 0.
 
@@ -195,6 +195,20 @@ Al consultar una orden concreta añade un bloque **Lightning en vivo (LND)** con
 El bloque se omite sin ruido si `lncli` no está disponible. Cuesta ~1 s con la orden resuelta y ~4 s si hay un pago todavía en vuelo; los listados (`--recent`, `--pending`, `--active`, `--stats`) no consultan LND.
 
 **Ese bloque solo mira `lnd1`** (el `lncli` por defecto) y localiza el pago al comprador decodificando su factura, así que no sirve para los pagos hechos desde `lnd2` ni para los de una Lightning Address. Para eso, en las órdenes con la hold invoice liquidada (`settled-hold-invoice` y `success`), `order.sh` añade la sección **Auditoría del pago al comprador**, que hace `tools/pago.py` (más abajo).
+
+```bash
+./tools/order.sh <order_id>       # Consultar una orden (UUID completo)
+./tools/order.sh 7361b8fe         # Buscar por UUID parcial
+./tools/order.sh --recent         # Últimas 10 órdenes
+./tools/order.sh --pending        # Órdenes pendientes activas
+./tools/order.sh --active         # Órdenes en curso (tomadas, no finalizadas)
+./tools/order.sh --stats          # Estadísticas generales (todo el historial)
+./tools/order.sh --stats 7d       # Estadísticas de la última semana
+./tools/order.sh --stats 30d      # Estadísticas del último mes
+./tools/order.sh --stats 2026-03-01..2026-03-23  # Entre dos fechas
+```
+
+Periodos disponibles para `--stats`: `today`/`hoy`, `24h`, `7d`/`week`/`semana`, `30d`/`month`/`mes`, `90d`/`trimestre`, `year`/`año`, `YYYY-MM-DD` (desde fecha), `YYYY-MM-DD..YYYY-MM-DD` (rango).
 
 ### tools/pago.py
 
@@ -210,20 +224,6 @@ Cada reintento del pago es un pago distinto con su propio hash, y el `hash` que 
 Cómo localiza el pago: por el hash de la factura del comprador si dio una; si dio una Lightning Address no hay hash, y se busca por importe (`amount − fee`, exacto) y fecha, y lo dice. Avisa cuando otras órdenes tienen el mismo importe en esos días (los intentos podrían mezclarse), cuando hay más de un pago completado para una orden (posible doble pago), cuando hay uno en vuelo, cuando la contabilidad no coincide con LND y cuando un nodo no responde o `lnd2` no está configurado. Los criterios están en `lib/auditoria.py`.
 
 Solo lee: la instantánea de Mostro, LND con macaroons de solo lectura y `accounting.db`. Necesita `LND2_TLSCERT` y `LND2_MACAROON` en el `.env`, igual que `accounting.py`.
-
-```bash
-./tools/order.sh <order_id>       # Consultar una orden (UUID completo)
-./tools/order.sh 7361b8fe         # Buscar por UUID parcial
-./tools/order.sh --recent         # Últimas 10 órdenes
-./tools/order.sh --pending        # Órdenes pendientes activas
-./tools/order.sh --active         # Órdenes en curso (tomadas, no finalizadas)
-./tools/order.sh --stats          # Estadísticas generales (todo el historial)
-./tools/order.sh --stats 7d       # Estadísticas de la última semana
-./tools/order.sh --stats 30d      # Estadísticas del último mes
-./tools/order.sh --stats 2026-03-01..2026-03-23  # Entre dos fechas
-```
-
-Periodos disponibles para `--stats`: `today`/`hoy`, `24h`, `7d`/`week`/`semana`, `30d`/`month`/`mes`, `90d`/`trimestre`, `year`/`año`, `YYYY-MM-DD` (desde fecha), `YYYY-MM-DD..YYYY-MM-DD` (rango).
 
 ### tools/user.sh
 

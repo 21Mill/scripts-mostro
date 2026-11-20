@@ -38,6 +38,12 @@ if ! bash "$REPO/tools/test-comisiones.sh"; then
 fi
 echo
 
+echo "── tools/test-order-log.sh ──"
+if ! bash "$REPO/tools/test-order-log.sh"; then
+    fallos=$((fallos + 1))
+fi
+echo
+
 # Comprobación de sintaxis: barata y atrapa el error más tonto antes de reiniciar un
 # servicio en producción.
 echo "── sintaxis ──"

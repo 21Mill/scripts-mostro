@@ -417,9 +417,28 @@ log_disponible() {
     [[ -n "$MOSTRO_LOG" && -r "$MOSTRO_LOG" ]]
 }
 
-# Lineas de una orden, sin los codigos de color que escribe mostrod.
+# Lineas de una orden, sin los codigos de color que escribe mostrod, en orden cronologico.
+#
+# logrotate parte el log cada semana: lo anterior a la ultima rotacion esta en .1, sin
+# comprimir, y lo anterior a eso en .2.gz. Una orden puede quedar repartida entre ficheros,
+# asi que se busca en los tres, del mas antiguo al mas nuevo. Mas atras habria que
+# descomprimir demasiado por consulta, y una orden de esa edad ya no tiene historial.
+#
+# $2 es el epoch en que se creo la orden: un fichero cuya ultima escritura es anterior no
+# puede contenerla, y asi una orden reciente sigue costando un solo grep.
 orden_log() {
-    grep -F "$1" "$MOSTRO_LOG" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
+    local clave="$1" desde="${2:-0}" f modificado
+    {
+        for f in "$MOSTRO_LOG.2.gz" "$MOSTRO_LOG.1" "$MOSTRO_LOG"; do
+            [[ -r "$f" ]] || continue
+            modificado=$(stat -c %Y "$f" 2>/dev/null || echo 0)
+            [[ "$modificado" -ge "$desde" ]] || continue
+            case "$f" in
+                *.gz) zgrep -F -- "$clave" "$f" ;;
+                *)    grep -F -- "$clave" "$f" ;;
+            esac 2>/dev/null
+        done
+    } | sed 's/\x1b\[[0-9;]*m//g'
 }
 
 # "2026-10-09T11:01:16.123456Z ..." -> "11:01:16"
@@ -430,6 +449,32 @@ log_hora() {
 
 log_fecha() {
     echo "$1" | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+}
+
+# Nota que una parte puso en una orden, leída del log. Cuando alguien puntúa, mostrod le
+# contesta con un `rate-received` cuyo `rating_user` es el valor, dirigido a la clave de
+# operación de quien puntuó: comprobado con las órdenes en las que valoró una sola parte, donde
+# el mensaje va siempre a esa clave. Si hay varios, el último. Vacío si no hay ninguno.
+# Args: lineas_del_log clave_de_operacion
+valor_valoracion() {
+    local lineas="$1" clave="$2"
+    [[ -n "$lineas" && -n "$clave" ]] || return 0
+    grep -F 'rate-received' <<<"$lineas" | grep -F " to $clave " \
+        | grep -oE 'rating_user[^0-9]{1,6}[0-9]+' | grep -oE '[0-9]+$' | tail -n 1
+}
+
+# Una línea de la sección Valoraciones. Args: etiqueta flag valor destinatario
+linea_valoracion() {
+    local etiqueta="$1" flag="$2" valor="$3" destino="$4"
+    if [[ -n "$flag" && "$flag" != "0" ]]; then
+        if [[ -n "$valor" ]]; then
+            echo -e "  ${etiqueta} ✅ ${valor} ⭐  ${DIM}(al ${destino})${NC}"
+        else
+            echo -e "  ${etiqueta} ✅ ${DIM}(la nota no consta en el log)${NC}"
+        fi
+    else
+        echo -e "  ${etiqueta} ${DIM}no${NC}"
+    fi
 }
 
 # Traduce los motivos que escribe mostrod. Si no conoce uno lo devuelve tal
@@ -1043,7 +1088,7 @@ while IFS='|' read -r uuid kind status event_id hash preimage \
     # Va antes de disputas porque responde a la pregunta con la que suele
     # llegar la gente: que ha pasado con mi orden.
     if log_disponible; then
-        order_lines=$(orden_log "$uuid")
+        order_lines=$(orden_log "$uuid" "$created_at")
         if [[ -n "$order_lines" ]]; then
             mostrar_motivo_final "$order_lines"
             mostrar_facturas_comprador "$order_lines"
@@ -1066,11 +1111,14 @@ while IFS='|' read -r uuid kind status event_id hash preimage \
         echo ""
     fi
 
-    # --- Ratings ---
-    if [[ ("$buyer_sent_rate" != "0" && "$buyer_sent_rate" != "") || ("$seller_sent_rate" != "0" && "$seller_sent_rate" != "") ]]; then
+    # --- Valoraciones ---
+    # buyer_sent_rate y seller_sent_rate solo dicen si cada parte valoró (0 o 1): imprimirlos
+    # daba un "⭐ 1" que parecía una estrella y era un "sí". La nota está en el log, que ya se
+    # leyó arriba en order_lines. En una orden completada se enseña aunque nadie valorara.
+    if [[ "$status" == "success" || ("$buyer_sent_rate" != "0" && "$buyer_sent_rate" != "") || ("$seller_sent_rate" != "0" && "$seller_sent_rate" != "") ]]; then
         echo -e "${BOLD}  ─── Valoraciones ───${NC}"
-        [[ "$buyer_sent_rate" != "0" && "$buyer_sent_rate" != "" ]] && echo -e "  Rating comprador:   ⭐ $buyer_sent_rate"
-        [[ "$seller_sent_rate" != "0" && "$seller_sent_rate" != "" ]] && echo -e "  Rating vendedor:    ⭐ $seller_sent_rate"
+        linea_valoracion "Comprador valoró:" "$buyer_sent_rate" "$(valor_valoracion "${order_lines:-}" "$buyer_pubkey")" "vendedor"
+        linea_valoracion "Vendedor valoró: " "$seller_sent_rate" "$(valor_valoracion "${order_lines:-}" "$seller_pubkey")" "comprador"
         echo ""
     fi
 
