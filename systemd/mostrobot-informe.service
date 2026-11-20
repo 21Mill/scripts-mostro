@@ -1,0 +1,36 @@
+[Unit]
+Description=NostroMostro mostrobot-informe (user mostrobot)
+After=network-online.target mostro.service
+Wants=network-online.target
+
+[Service]
+User=mostrobot
+Group=mostrobot
+Environment=HOME=/opt/mostrobot
+Environment=NOSTROMOSTRO_WEB_REPO=/opt/mostrobot/nostromostro.github.io
+WorkingDirectory=/opt/mostrobot/scripts/accounting
+ExecStart=/opt/mostrobot/venv/bin/python -u /opt/mostrobot/scripts/accounting/informe-mensual.py
+Type=oneshot
+StandardOutput=journal
+StandardError=journal
+
+# Hardening: no privilege gain, read-only system, no /home, writes only under /opt/mostrobot.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/mostrobot
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK

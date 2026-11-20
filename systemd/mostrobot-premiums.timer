@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily premiums export (user mostrobot)
+[Timer]
+OnCalendar=*-*-* 00:00:00
+Persistent=true
+[Install]
+WantedBy=timers.target
