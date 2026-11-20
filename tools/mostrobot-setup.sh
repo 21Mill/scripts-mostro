@@ -40,7 +40,7 @@ preparar() {
 
     echo "== código y estado (copia inicial completa)"
     rsync -a --delete \
-        --exclude '__pycache__' --exclude 'admin/' --exclude 'systemd/' --exclude 'tools/' \
+        --exclude '__pycache__' --include 'admin/' --include 'admin/env.sh' --exclude 'admin/*' --exclude 'systemd/' --exclude 'tools/' \
         --exclude 'app.log' --exclude '.env' --exclude '.env.example' \
         "$SRC/" "$DST/scripts/"
     chown -R mostrobot:mostrobot "$DST/scripts"
@@ -104,6 +104,8 @@ Wants=network-online.target
 User=mostrobot
 Group=mostrobot
 Environment=HOME=$DST
+# venv first: scripts that call python3 (premiums.sh -> resumen.py) need its packages.
+Environment=PATH=$DST/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=NOSTROMOSTRO_WEB_REPO=$DST/nostromostro.github.io
 WorkingDirectory=$2
 ExecStart=$3
@@ -142,14 +144,22 @@ activar() {
     crontab -u admin -l > "$B/crontab-admin" 2>/dev/null || true
     echo "   en $B"
 
-    echo "== parar los bots antiguos y volver a copiar el estado (pudo cambiar desde preparar)"
+    if [ "$(systemctl show mostrobot -p User --value)" = mostrobot ]; then
+        echo "== los bots ya corren como mostrobot: NO se recopia el estado (el de $DST es el bueno)"
+        RESYNC=no
+    else
+        RESYNC=si
+    fi
+    echo "== parar los bots"
     systemctl stop "${UNITS[@]}"
+    if [ "$RESYNC" = si ]; then
     rsync -a \
-        --exclude '__pycache__' --exclude 'admin/' --exclude 'systemd/' --exclude 'tools/' \
+        --exclude '__pycache__' --include 'admin/' --include 'admin/env.sh' --exclude 'admin/*' --exclude 'systemd/' --exclude 'tools/' \
         --exclude 'app.log' --exclude '.env' --exclude '.env.example' \
         "$SRC/" "$DST/scripts/"
     rsync -a "$WEB_SRC/" "$DST/nostromostro.github.io/"
     chown -R mostrobot:mostrobot "$DST/scripts" "$DST/nostromostro.github.io"
+    fi
 
     echo "== .env: LND1 por nombre (sin SNI presenta un certificado efímero caducado)"
     grep -q '^LND1_RPCSERVER=' "$DST/scripts/.env" || echo 'LND1_RPCSERVER=localhost:10009' >> "$DST/scripts/.env"

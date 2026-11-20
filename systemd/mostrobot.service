@@ -7,6 +7,7 @@ Wants=network-online.target
 User=mostrobot
 Group=mostrobot
 Environment=HOME=/opt/mostrobot
+Environment=PATH=/opt/mostrobot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=NOSTROMOSTRO_WEB_REPO=/opt/mostrobot/nostromostro.github.io
 WorkingDirectory=/opt/mostrobot/scripts/bot
 ExecStart=/opt/mostrobot/venv/bin/python -u /opt/mostrobot/scripts/bot/bot.py

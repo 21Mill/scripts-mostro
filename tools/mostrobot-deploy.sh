@@ -19,7 +19,7 @@ tail -1 /tmp/mostrobot-tests.log; rm -f /tmp/mostrobot-tests.log
 
 echo "== código (sin estado ni .env)"
 rsync -a --itemize-changes \
-    --exclude '__pycache__' --exclude 'admin/' --exclude 'systemd/' --exclude 'tools/' \
+    --exclude '__pycache__' --include 'admin/' --include 'admin/env.sh' --exclude 'admin/*' --exclude 'systemd/' --exclude 'tools/' \
     --exclude 'app.log' --exclude '.env' --exclude '.env.example' \
     --exclude '*.json' --exclude '*.db' --exclude '*.db.*' --exclude '*.db-*' \
     "$SRC/" "$DST/scripts/" | grep -v '^\.d' || true
