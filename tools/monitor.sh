@@ -101,7 +101,8 @@ while true; do
         BLOCK_HEIGHT=$(echo "$RESULT" | awk '{print $1}')
         BLOCK_HASH=$(echo "$RESULT" | awk '{print $2}')
 
-        MSG="✅ <b>Transacción confirmada!</b>%0A%0A📦 Bloque: <code>${BLOCK_HEIGHT}</code>%0A🔗 TX: <code>${TXID}</code>%0A🔍 <a href=\"https://mempool.space/tx/${TXID}\">Ver en mempool.space</a>"
+        NL=$'\n'
+        MSG="✅ <b>Transacción confirmada!</b>${NL}${NL}📦 Bloque: <code>${BLOCK_HEIGHT}</code>${NL}🔗 TX: <code>${TXID}</code>${NL}🔍 <a href=\"https://mempool.space/tx/${TXID}\">Ver en mempool.space</a>"
 
         echo "✅ ¡Confirmada en bloque $BLOCK_HEIGHT!"
         send_telegram "$MSG"
