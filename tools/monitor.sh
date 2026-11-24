@@ -15,8 +15,8 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-if ! command -v curl &> /dev/null || ! command -v jq &> /dev/null; then
-    echo "Error: Se requiere 'curl' y 'jq'. Instálalos primero."
+if ! command -v bitcoin-cli &> /dev/null || ! command -v jq &> /dev/null; then
+    echo "Error: Se requiere 'bitcoin-cli' y 'jq'. Instálalos primero."
     exit 1
 fi
 
@@ -28,18 +28,25 @@ if ! [[ "$TXID" =~ ^[0-9a-fA-F]{64}$ ]]; then
     exit 1
 fi
 
+# Consulta de la tx al nodo propio (requiere txindex=1 para txs ya confirmadas)
+BITCOIN_CLI="${BITCOIN_CLI:-bitcoin-cli}"
+
+get_tx() {
+    "$BITCOIN_CLI" getrawtransaction "$TXID" true 2>&1
+}
+
 # Validación de existencia: la tx debe ser visible en mempool o confirmada
 check_tx_exists() {
     local RESPONSE
-    RESPONSE=$(curl -s --max-time 10 "https://mempool.space/api/tx/$TXID")
+    RESPONSE=$(get_tx)
     if echo "$RESPONSE" | jq -e '.txid' &>/dev/null; then
         return 0
     fi
-    RESPONSE=$(curl -s --max-time 10 "https://blockstream.info/api/tx/$TXID")
-    if echo "$RESPONSE" | jq -e '.txid' &>/dev/null; then
-        return 0
+    if echo "$RESPONSE" | grep -q "No such mempool or blockchain transaction"; then
+        return 1
     fi
-    return 1
+    echo "Error: no se pudo consultar el nodo con '$BITCOIN_CLI': $RESPONSE"
+    exit 1
 }
 
 if ! check_tx_exists; then
@@ -58,9 +65,6 @@ if [ -z "$MONITOR_BG" ]; then
     exit 0
 fi
 
-API_URL="https://mempool.space/api/tx/$TXID"
-FALLBACK_URL="https://blockstream.info/api/tx/$TXID"
-
 send_telegram() {
     local MESSAGE="$1"
     if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$CHAT_ID" ]; then
@@ -69,28 +73,25 @@ send_telegram() {
 }
 
 check_tx() {
-    local RESPONSE
-    RESPONSE=$(curl -s --max-time 10 "$API_URL")
+    local RESPONSE CONFIRMATIONS
+    RESPONSE=$(get_tx)
 
-    if [ -z "$RESPONSE" ] || echo "$RESPONSE" | grep -q "error"; then
-        RESPONSE=$(curl -s --max-time 10 "$FALLBACK_URL")
-    fi
+    CONFIRMATIONS=$(echo "$RESPONSE" | jq -r '.confirmations // 0' 2>/dev/null)
 
-    local CONFIRMED
-    CONFIRMED=$(echo "$RESPONSE" | jq -r '.status.confirmed' 2>/dev/null)
-
-    if [ "$CONFIRMED" == "true" ]; then
-        BLOCK_HEIGHT=$(echo "$RESPONSE" | jq -r '.status.block_height' 2>/dev/null)
-        BLOCK_HASH=$(echo "$RESPONSE" | jq -r '.status.block_hash' 2>/dev/null)
-        echo "$BLOCK_HEIGHT $BLOCK_HASH"
-        return 0
+    if [[ "$CONFIRMATIONS" =~ ^[0-9]+$ ]] && [ "$CONFIRMATIONS" -gt 0 ]; then
+        BLOCK_HASH=$(echo "$RESPONSE" | jq -r '.blockhash' 2>/dev/null)
+        BLOCK_HEIGHT=$("$BITCOIN_CLI" getblockheader "$BLOCK_HASH" 2>/dev/null | jq -r '.height' 2>/dev/null)
+        if [ -n "$BLOCK_HEIGHT" ] && [ "$BLOCK_HEIGHT" != "null" ]; then
+            echo "$BLOCK_HEIGHT $BLOCK_HASH"
+            return 0
+        fi
     fi
 
     return 1
 }
 
 echo "🔎 Monitorizando: $TXID"
-echo "🌐 Fuente: mempool.space (fallback: blockstream.info)"
+echo "🌐 Fuente: nodo propio (bitcoin-cli)"
 echo "⏱️  Intervalo de comprobación: ${CHECK_INTERVAL}s"
 echo ""
 
